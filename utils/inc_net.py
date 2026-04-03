@@ -3,8 +3,10 @@ import logging
 import torch
 from torch import nn
 from backbone.linears import SimpleLinear, SplitCosineLinear, CosineLinear, EaseCosineLinear, SimpleContinualLinear, TunaLinear
+from utils.timm_compat import patch_timm_dataclass_defaults
 
 from backbone.prompt import CodaPrompt
+patch_timm_dataclass_defaults()
 import timm
 
 def get_backbone(args, pretrained=False):

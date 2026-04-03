@@ -1,6 +1,9 @@
 import math
 import torch
 import torch.nn as nn
+from utils.timm_compat import patch_timm_dataclass_defaults
+
+patch_timm_dataclass_defaults()
 from timm.models.layers import DropPath
 import timm
 from functools import partial
