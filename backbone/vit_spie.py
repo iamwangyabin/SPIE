@@ -17,14 +17,13 @@ Tensor = torch.Tensor
 
 class ExpertMLPLoRA(nn.Module):
     """
-    Per-expert low-rank delta for the shared MLP branch.
+    给共享 MLP 分支额外挂上的 expert 专属低秩增量。
 
-    Input:
-        z: [B, K, M, D]
-            B: batch size
-            K: number of active experts
-            M: expert tokens per expert
-            D: embedding dimension
+    输入 z 的形状是 [B, K, M, D]：
+    B: batch size
+    K: 当前激活的 expert 数
+    M: 每个 expert 的 token 数
+    D: token embedding 维度
     """
 
     def __init__(self, num_experts: int, dim: int, rank: int, alpha: float = 1.0):
@@ -59,10 +58,12 @@ class ExpertMLPLoRA(nn.Module):
             A = self.A
             B = self.B
         else:
+            # 只取当前激活 expert 对应的低秩参数，避免无关 expert 参与前向。
             expert_indices = expert_indices.to(device=z.device, dtype=torch.long)
             A = self.A.index_select(0, expert_indices)
             B = self.B.index_select(0, expert_indices)
 
+        # LoRA 标准两步：先降维再升维。
         down = torch.einsum("bkmd,kdr->bkmr", z, A)
         up = torch.einsum("bkmr,krd->bkmd", down, B)
         return up * self.scale
@@ -70,7 +71,8 @@ class ExpertMLPLoRA(nn.Module):
 
 class ExpertWrappedBlock(nn.Module):
     """
-    Shared attention + shared MLP, with expert-only LoRA on the MLP output.
+    一个 ViT block 的 SPiE 版本：
+    注意力和主 MLP 是共享的，但 expert token 在 MLP 输出端会额外叠加 expert 专属 LoRA。
     """
 
     def __init__(
@@ -123,6 +125,7 @@ class ExpertWrappedBlock(nn.Module):
             return self.attn(x)
         if self._attn_accepts_mask:
             return self.attn(x, attn_mask=attn_mask)
+        # 一些 timm 版本的 attention.forward 不收 attn_mask，这里做兼容。
         return self._forward_attention_compat(x, attn_mask)
 
     def _forward_attention_compat(self, x: Tensor, attn_mask: Tensor) -> Tensor:
@@ -166,6 +169,7 @@ class ExpertWrappedBlock(nn.Module):
         if s.ndim != 3:
             raise ValueError(f"s must be [B, T, D], got shape {tuple(s.shape)}")
 
+        # s 是把 backbone token 和 expert token 沿序列维拼起来后的结果。
         B, T, D = s.shape
         expert_tokens_total = T - num_backbone_tokens
         if expert_tokens_total < 0:
@@ -177,12 +181,15 @@ class ExpertWrappedBlock(nn.Module):
 
         K = expert_tokens_total // self.expert_tokens
 
+        # 注意力阶段是共享的，但会受 attn_mask 约束：
+        # expert token 只能看 backbone token 和自己 expert 内部的 token。
         s = s + self.drop_path1(self.ls1(self._forward_attention(self.norm1(s), attn_mask=attn_mask)))
 
         s_norm = self.norm2(s)
         shared_delta = self.mlp(s_norm)
 
         if expert_tokens_total > 0:
+            # 只取 expert token 那一段，应用 expert 专属 LoRA，然后再加回共享 MLP 输出。
             z_norm = s_norm[:, num_backbone_tokens:, :].reshape(B, K, self.expert_tokens, D)
             expert_delta = self.expert_lora(z_norm, expert_indices=active_expert_indices)
             shared_delta[:, num_backbone_tokens:, :] += expert_delta.reshape(B, K * self.expert_tokens, D)
@@ -193,6 +200,7 @@ class ExpertWrappedBlock(nn.Module):
 
 @dataclass
 class ExpertOutputs:
+    # backbone 和 expert 分支的中间输出统一打包，便于训练和推理复用。
     cls_token: Optional[Tensor]
     backbone_tokens: Tensor
     expert_tokens: Tensor
@@ -202,7 +210,7 @@ class ExpertOutputs:
 
 class ExpertViT(nn.Module):
     """
-    Shared ViT trunk with isolated expert tokens and expert-only LoRA.
+    共享 ViT 主干，加上隔离的 expert token 和 expert-only LoRA。
     """
 
     def __init__(
@@ -247,10 +255,12 @@ class ExpertViT(nn.Module):
         self.expert_tokens = expert_tokens
         self.model_name = model_name
 
+        # 每个 expert 拥有自己的一组可学习 token。
         self.expert_tokens_param = nn.Parameter(torch.zeros(1, num_experts, expert_tokens, self.embed_dim))
         nn.init.trunc_normal_(self.expert_tokens_param, std=0.02)
 
         if use_expert_pos_embed:
+            # expert token 也可以带独立的位置编码。
             self.expert_pos_embed = nn.Parameter(torch.zeros(1, num_experts, expert_tokens, self.embed_dim))
             nn.init.trunc_normal_(self.expert_pos_embed, std=0.02)
         else:
@@ -274,6 +284,7 @@ class ExpertViT(nn.Module):
 
     @torch.no_grad()
     def freeze_backbone_(self) -> None:
+        # 只保留 expert 相关参数可训练，共享主干全部冻结。
         expert_ids = {id(p) for p in self.expert_parameters()}
         for p in self.parameters():
             p.requires_grad = id(p) in expert_ids
@@ -310,19 +321,24 @@ class ExpertViT(nn.Module):
         M = expert_tokens
         T = N + K * M
 
+        # 默认全部置为 -inf，表示不允许注意。
         mask = torch.full((T, T), float("-inf"), device=device, dtype=dtype)
+        # backbone token 彼此之间完全可见。
         mask[:N, :N] = 0.0
 
         for k in range(K):
             q0 = N + k * M
             q1 = q0 + M
+            # 第 k 个 expert token 允许看 backbone token。
             mask[q0:q1, :N] = 0.0
+            # 第 k 个 expert token 允许看自己 expert 内部的 token。
             mask[q0:q1, q0:q1] = 0.0
 
         self._mask_cache[key] = mask
         return mask
 
     def _prepare_backbone_tokens(self, x: Tensor) -> Tensor:
+        # 复用原始 ViT 的 patch embedding、prefix token 和位置编码逻辑。
         B = x.shape[0]
         x = self.patch_embed(x)
 
@@ -356,6 +372,7 @@ class ExpertViT(nn.Module):
         active_experts: Optional[Union[Sequence[int], Tensor]],
         device: torch.device,
     ) -> Tuple[Tensor, Tensor]:
+        # active_experts=None 时表示推理时激活全部 expert。
         if active_experts is None:
             active_indices = torch.arange(self.num_experts, device=device, dtype=torch.long)
         elif isinstance(active_experts, torch.Tensor):
@@ -368,6 +385,7 @@ class ExpertViT(nn.Module):
         if torch.any(active_indices < 0) or torch.any(active_indices >= self.num_experts):
             raise ValueError(f"active expert index out of range [0, {self.num_experts - 1}]")
 
+        # 取出被激活 expert 的 token 参数。
         z = self.expert_tokens_param.index_select(1, active_indices)
         if self.expert_pos_embed is not None:
             z = z + self.expert_pos_embed.index_select(1, active_indices)
@@ -386,6 +404,7 @@ class ExpertViT(nn.Module):
         z = z.expand(B, -1, -1, -1)
         K = z.shape[1]
 
+        # 按 [backbone tokens, all active expert tokens] 的顺序打包成一个长序列。
         packed = torch.cat([
             x_backbone,
             z.reshape(B, K * self.expert_tokens, self.embed_dim),
@@ -410,6 +429,7 @@ class ExpertViT(nn.Module):
         packed = self.norm(packed)
         backbone_tokens = packed[:, :num_backbone_tokens, :]
         expert_tokens = packed[:, num_backbone_tokens:, :].reshape(B, K, self.expert_tokens, self.embed_dim)
+        # 一个 expert 的多个 token 取均值，得到该 expert 的 pooled 表示。
         expert_pooled = expert_tokens.mean(dim=2)
         cls_token = backbone_tokens[:, 0] if self.has_class_token else None
 
@@ -433,6 +453,7 @@ class ExpertViT(nn.Module):
         return out.expert_pooled
 
     def get_single_expert_state(self, expert_idx: int) -> Dict[str, Tensor]:
+        # 导出单个 expert 的最小可迁移状态：expert token + 各层 expert LoRA。
         if not (0 <= expert_idx < self.num_experts):
             raise ValueError(f"expert_idx must be in [0, {self.num_experts - 1}], got {expert_idx}")
 
@@ -450,6 +471,7 @@ class ExpertViT(nn.Module):
 
     @torch.no_grad()
     def load_single_expert_state(self, state: Dict[str, Tensor], target_expert_idx: int) -> None:
+        # 把外部 expert 状态装载到当前模型指定 expert 槽位。
         if not (0 <= target_expert_idx < self.num_experts):
             raise ValueError(f"target_expert_idx must be in [0, {self.num_experts - 1}], got {target_expert_idx}")
 
@@ -481,7 +503,7 @@ class ExpertViT(nn.Module):
 
 class CosineClassifier(nn.Module):
     """
-    Small cosine classifier for one expert.
+    单个 expert 对应的余弦分类头。
     """
 
     def __init__(self, dim: int, num_classes: int, init_scale: float = 10.0):
@@ -495,6 +517,7 @@ class CosineClassifier(nn.Module):
         nn.init.normal_(self.weight, std=0.02)
 
     def forward(self, x: Tensor) -> Tensor:
+        # 特征和权重都先归一化，再做缩放后的余弦相似度分类。
         x = F.normalize(x, dim=-1)
         w = F.normalize(self.weight, dim=-1)
         scale = torch.exp(self.logit_scale).clamp(max=100.0)
@@ -503,7 +526,7 @@ class CosineClassifier(nn.Module):
 
 class ExpertClassifierBank(nn.Module):
     """
-    One classifier head per expert/task.
+    每个 expert / task 一个独立分类头。
     """
 
     def __init__(self, embed_dim: int, num_classes_per_expert: Sequence[int]):
@@ -519,6 +542,7 @@ class ExpertClassifierBank(nn.Module):
         ])
 
     def forward_active(self, pooled: Tensor, active_expert_indices: Tensor) -> List[Tensor]:
+        # pooled 的第 local_k 个位置，送入 active_expert_indices[local_k] 对应的 head。
         logits_per_expert: List[Tensor] = []
         for local_k, expert_idx in enumerate(active_expert_indices.tolist()):
             logits = self.heads[expert_idx](pooled[:, local_k, :])
@@ -530,6 +554,7 @@ class ExpertClassifierBank(nn.Module):
         pooled: Tensor,
         active_expert_indices: Tensor,
     ) -> Tuple[Tensor, List[Dict[str, int]]]:
+        # 把多个 expert 的局部 logits 拼接成一个大 logits，并返回位置映射表。
         logits_list = self.forward_active(pooled, active_expert_indices)
         all_logits = torch.cat(logits_list, dim=1)
 
@@ -564,7 +589,8 @@ class ExpertClassifierBank(nn.Module):
 
 class IncrementalExpertModel(nn.Module):
     """
-    Shared expert backbone + per-expert classifier heads.
+    SPiE 的完整模型：
+    共享 expert backbone + 每个 expert 独立分类头。
     """
 
     def __init__(
@@ -609,8 +635,8 @@ class IncrementalExpertModel(nn.Module):
         yield from self.heads.parameters()
 
     def parameters_for_single_task(self, expert_idx: int) -> Iterable[nn.Parameter]:
-        # The full expert banks are optimized here, but only the selected slot receives
-        # nonzero gradients because the forward uses one expert index.
+        # 这里返回的是整个 expert 参数库，但由于前向只激活一个 expert，
+        # 实际只有对应槽位会收到非零梯度。
         yield from self.backbone.expert_parameters()
         yield from self.heads.heads[expert_idx].parameters()
 
@@ -637,6 +663,7 @@ class IncrementalExpertModel(nn.Module):
         ]
 
     def forward_train_task(self, x: Tensor, expert_idx: int) -> Tensor:
+        # 单任务训练：只激活一个 expert，并只走它自己的分类头。
         out = self.backbone(x, active_experts=[expert_idx], return_dict=True)
         pooled = out.expert_pooled[:, 0, :]
         logits = self.heads.heads[expert_idx](pooled)
@@ -649,6 +676,7 @@ class IncrementalExpertModel(nn.Module):
         active_experts: Optional[Union[Sequence[int], Tensor]] = None,
     ) -> Dict[str, Union[Tensor, List[Dict[str, int]]]]:
         self.eval()
+        # 推理时可以同时激活多个 expert，再把所有局部类别拼成统一输出空间。
         out = self.backbone(x, active_experts=active_experts, return_dict=True)
         logits, mapping = self.heads.concat_active_logits(out.expert_pooled, out.active_expert_indices)
         pred_concat_idx = logits.argmax(dim=1)
