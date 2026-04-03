@@ -89,6 +89,11 @@ class Learner(BaseLearner):
                 if param.requires_grad:
                     logging.info("{}: {}".format(name, param.numel()))
 
+    def _backbone_module(self):
+        if isinstance(self._network.backbone, nn.DataParallel):
+            return self._network.backbone.module
+        return self._network.backbone
+
     def after_task(self):
         self._known_classes = self._total_classes
 
@@ -117,27 +122,30 @@ class Learner(BaseLearner):
 
         if len(self._multiple_gpus) > 1:
             print('Multiple GPUs')
-            self._network = nn.DataParallel(self._network, self._multiple_gpus)
+            self._network.backbone = nn.DataParallel(self._network.backbone, self._multiple_gpus)
 
         self._train(self.train_loader, self.test_loader)
         #  self.replace_fc()
 
         if len(self._multiple_gpus) > 1:
-            self._network = self._network.module
+            self._network.backbone = self._backbone_module()
 
     def _train(self, train_loader, test_loader):
-        self._network.backbone.to(self._device)
+        backbone = self._network.backbone
+        backbone_module = self._backbone_module()
+
+        backbone.to(self._device)
         self._network.fc.to(self._device)
-        optimizer = self.get_optimizer(self._network.backbone)
+        optimizer = self.get_optimizer(backbone)
         scheduler = self.get_scheduler(optimizer)
 
         self._init_train(train_loader, test_loader, optimizer, scheduler)
-        self._network.backbone.adapter_update()
+        backbone_module.adapter_update()
         if self._cur_task > 0:
-            self._network.backbone.merge()
-        self._compute_mean(self._network.backbone)
+            backbone_module.merge()
+        self._compute_mean(backbone)
         if self._cur_task > 0:
-            self.classifer_align(self._network.backbone)
+            self.classifer_align(backbone)
 
     def get_optimizer(self, model):
         base_params = [p for name, p in model.named_parameters() if 'adapter' in name and p.requires_grad]
@@ -216,12 +224,13 @@ class Learner(BaseLearner):
         logging.info(info)
     def orth_loss(self, features):
         final_loss = 0
+        backbone = self._backbone_module()
        
         for i in range(self._cur_task):
             loss = 0
             for j in range(12):  
-                cur_up_proj = self._network.backbone.cur_adapter[j].up_proj.weight
-                prev_up_proj = self._network.backbone.adapter_list[i][j].up_proj.weight
+                cur_up_proj = backbone.cur_adapter[j].up_proj.weight
+                prev_up_proj = backbone.adapter_list[i][j].up_proj.weight
                 cur_up_proj_normalized = F.normalize(cur_up_proj, p=2, dim=1)  # Normalize along the feature dimension
                 prev_up_proj_normalized = F.normalize(prev_up_proj, p=2, dim=1)
 
