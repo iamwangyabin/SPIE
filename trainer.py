@@ -9,6 +9,22 @@ import os
 import numpy as np
 
 
+def _to_builtin(value):
+    if isinstance(value, dict):
+        return {key: _to_builtin(val) for key, val in value.items()}
+    if isinstance(value, list):
+        return [_to_builtin(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_to_builtin(item) for item in value)
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
+def _format_average(values):
+    return "{:.2f}".format(sum(values) / len(values))
+
+
 def train(args):
     seed_list = copy.deepcopy(args["seed"])
     device = copy.deepcopy(args["device"])
@@ -75,8 +91,8 @@ def _train(args):
         model.after_task()
 
         if nme_accy is not None:
-            logging.info("CNN: {}".format(cnn_accy["grouped"]))
-            logging.info("NME: {}".format(nme_accy["grouped"]))
+            logging.info("CNN: {}".format(_to_builtin(cnn_accy["grouped"])))
+            logging.info("NME: {}".format(_to_builtin(nme_accy["grouped"])))
 
             cnn_keys = [key for key in cnn_accy["grouped"].keys() if '-' in key]    
             cnn_values = [cnn_accy["grouped"][key] for key in cnn_keys]
@@ -92,19 +108,21 @@ def _train(args):
             nme_curve["top1"].append(nme_accy["top1"])
             nme_curve["top5"].append(nme_accy["top5"])
 
-            logging.info("CNN top1 curve: {}".format(cnn_curve["top1"]))
-            logging.info("CNN top5 curve: {}".format(cnn_curve["top5"]))
-            logging.info("NME top1 curve: {}".format(nme_curve["top1"]))
-            logging.info("NME top5 curve: {}\n".format(nme_curve["top5"]))
+            logging.info("CNN top1 curve: {}".format(_to_builtin(cnn_curve["top1"])))
+            logging.info("CNN top5 curve: {}".format(_to_builtin(cnn_curve["top5"])))
+            logging.info("NME top1 curve: {}".format(_to_builtin(nme_curve["top1"])))
+            logging.info("NME top5 curve: {}\n".format(_to_builtin(nme_curve["top5"])))
 
-            print('Average Accuracy (CNN):', sum(cnn_curve["top1"])/len(cnn_curve["top1"]))
-            print('Average Accuracy (NME):', sum(nme_curve["top1"])/len(nme_curve["top1"]))
+            avg_cnn = _format_average(cnn_curve["top1"])
+            avg_nme = _format_average(nme_curve["top1"])
+            print("Average Accuracy (CNN):", avg_cnn)
+            print("Average Accuracy (NME):", avg_nme)
 
-            logging.info("Average Accuracy (CNN): {}".format(sum(cnn_curve["top1"])/len(cnn_curve["top1"])))
-            logging.info("Average Accuracy (NME): {}".format(sum(nme_curve["top1"])/len(nme_curve["top1"])))
+            logging.info("Average Accuracy (CNN): {}".format(avg_cnn))
+            logging.info("Average Accuracy (NME): {}".format(avg_nme))
         else:
             logging.info("No NME accuracy.")
-            logging.info("CNN: {}".format(cnn_accy["grouped"]))
+            logging.info("CNN: {}".format(_to_builtin(cnn_accy["grouped"])))
 
             cnn_keys = [key for key in cnn_accy["grouped"].keys() if '-' in key]
             cnn_values = [cnn_accy["grouped"][key] for key in cnn_keys]
@@ -113,11 +131,12 @@ def _train(args):
             cnn_curve["top1"].append(cnn_accy["top1"])
             cnn_curve["top5"].append(cnn_accy["top5"])
 
-            logging.info("CNN top1 curve: {}".format(cnn_curve["top1"]))
-            logging.info("CNN top5 curve: {}\n".format(cnn_curve["top5"]))
+            logging.info("CNN top1 curve: {}".format(_to_builtin(cnn_curve["top1"])))
+            logging.info("CNN top5 curve: {}\n".format(_to_builtin(cnn_curve["top5"])))
 
-            print('Average Accuracy (CNN):', sum(cnn_curve["top1"])/len(cnn_curve["top1"]))
-            logging.info("Average Accuracy (CNN): {} \n".format(sum(cnn_curve["top1"])/len(cnn_curve["top1"])))
+            avg_cnn = _format_average(cnn_curve["top1"])
+            print("Average Accuracy (CNN):", avg_cnn)
+            logging.info("Average Accuracy (CNN): {} \n".format(avg_cnn))
 
     if 'print_forget' in args.keys() and args['print_forget'] is True:
         if len(cnn_matrix) > 0:

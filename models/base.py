@@ -108,7 +108,7 @@ class BaseLearner(object):
         ret["top{}".format(self.topk)] = np.around(
             (y_pred.T == np.tile(y_true, (self.topk, 1))).sum() * 100 / len(y_true),
             decimals=2,
-        )
+        ).item()
 
         return ret
 

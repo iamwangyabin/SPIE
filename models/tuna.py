@@ -121,7 +121,6 @@ class Learner(BaseLearner):
                                                     shuffle=True, num_workers=num_workers)
 
         if len(self._multiple_gpus) > 1:
-            print('Multiple GPUs')
             self._network.backbone = nn.DataParallel(self._network.backbone, self._multiple_gpus)
 
         self._train(self.train_loader, self.test_loader)
@@ -319,9 +318,6 @@ class Learner(BaseLearner):
 
             sampled_data = torch.cat(sampled_data, dim=0).float().to(self._device)
             sampled_label = torch.tensor(sampled_label).long().to(self._device)
-            if epoch == 0:
-                print("sampled data shape: ", sampled_data.shape)
-
             inputs = sampled_data
             targets = sampled_label
 

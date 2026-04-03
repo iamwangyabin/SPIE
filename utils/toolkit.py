@@ -72,7 +72,10 @@ def accuracy(y_pred, y_true, nb_old, init_cls=10, increment=10):
         (y_pred[idxes] == y_true[idxes]).sum() * 100 / len(idxes), decimals=2
     )
 
-    return all_acc
+    return {
+        key: value.item() if isinstance(value, np.generic) else value
+        for key, value in all_acc.items()
+    }
 
 
 def split_images_labels(imgs):
