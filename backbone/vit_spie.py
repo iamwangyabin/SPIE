@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import inspect
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
@@ -86,6 +87,7 @@ class ExpertWrappedBlock(nn.Module):
 
         self.norm1 = base_block.norm1
         self.attn = base_block.attn
+        self._attn_accepts_mask = self._attention_accepts_mask(self.attn)
         self.ls1 = getattr(base_block, "ls1", nn.Identity())
         self.drop_path1 = getattr(base_block, "drop_path1", nn.Identity())
 
@@ -109,6 +111,51 @@ class ExpertWrappedBlock(nn.Module):
             alpha=lora_alpha,
         )
 
+    @staticmethod
+    def _attention_accepts_mask(attn: nn.Module) -> bool:
+        try:
+            return "attn_mask" in inspect.signature(attn.forward).parameters
+        except (TypeError, ValueError):
+            return False
+
+    def _forward_attention(self, x: Tensor, attn_mask: Optional[Tensor]) -> Tensor:
+        if attn_mask is None:
+            return self.attn(x)
+        if self._attn_accepts_mask:
+            return self.attn(x, attn_mask=attn_mask)
+        return self._forward_attention_compat(x, attn_mask)
+
+    def _forward_attention_compat(self, x: Tensor, attn_mask: Tensor) -> Tensor:
+        B, N, _ = x.shape
+        num_heads = int(self.attn.num_heads)
+        qkv = self.attn.qkv(x)
+        head_dim = int(getattr(self.attn, "head_dim", qkv.shape[-1] // (3 * num_heads)))
+        qkv = qkv.reshape(B, N, 3, num_heads, head_dim).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv.unbind(0)
+
+        q_norm = getattr(self.attn, "q_norm", None)
+        if q_norm is not None:
+            q = q_norm(q)
+        k_norm = getattr(self.attn, "k_norm", None)
+        if k_norm is not None:
+            k = k_norm(k)
+
+        attn_scores = (q * float(getattr(self.attn, "scale", head_dim ** -0.5))) @ k.transpose(-2, -1)
+        attn_scores = attn_scores + attn_mask.to(device=attn_scores.device, dtype=attn_scores.dtype)
+        attn_probs = attn_scores.softmax(dim=-1)
+        attn_probs = self.attn.attn_drop(attn_probs)
+
+        out = attn_probs @ v
+        out = out.transpose(1, 2).reshape(B, N, int(getattr(self.attn, "attn_dim", num_heads * head_dim)))
+
+        attn_norm = getattr(self.attn, "norm", None)
+        if attn_norm is not None:
+            out = attn_norm(out)
+
+        out = self.attn.proj(out)
+        out = self.attn.proj_drop(out)
+        return out
+
     def forward(
         self,
         s: Tensor,
@@ -130,7 +177,7 @@ class ExpertWrappedBlock(nn.Module):
 
         K = expert_tokens_total // self.expert_tokens
 
-        s = s + self.drop_path1(self.ls1(self.attn(self.norm1(s), attn_mask=attn_mask)))
+        s = s + self.drop_path1(self.ls1(self._forward_attention(self.norm1(s), attn_mask=attn_mask)))
 
         s_norm = self.norm2(s)
         shared_delta = self.mlp(s_norm)
