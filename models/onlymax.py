@@ -177,8 +177,14 @@ class OnlyMaxNet(nn.Module):
         max_logits, best_expert_per_class = torch.max(stacked_logits, dim=0)
         best_scores_per_expert = stacked_logits.max(dim=2).values.transpose(0, 1)
         best_expert_per_sample = best_scores_per_expert.argmax(dim=1)
+        selected_logits = stacked_logits.permute(1, 0, 2)[
+            torch.arange(stacked_logits.shape[1], device=stacked_logits.device),
+            best_expert_per_sample,
+        ]
         return {
-            "logits": max_logits,
+            "logits": selected_logits,
+            "selected_logits": selected_logits,
+            "max_logits_per_class": max_logits,
             "stacked_logits": stacked_logits,
             "best_expert_per_class": best_expert_per_class,
             "best_expert_per_sample": best_expert_per_sample,
