@@ -65,7 +65,7 @@ class ExperimentLogger:
         project = args.get("swanlab_project")
 
         init_kwargs = {
-            "project": "SPIE" if not project  else project,
+            "project": "CIL",
             "config": config,
             "group": group,
             "experiment_name": name,
