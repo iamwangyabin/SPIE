@@ -53,12 +53,9 @@ class ExperimentLogger:
         if not self.enabled:
             return
 
-        try:
-            import swanlab
-        except ImportError as exc:
-            raise ImportError(
-                "swanlab logging was enabled, but the 'swanlab' package is not installed."
-            ) from exc
+
+        import swanlab
+
 
         self._swanlab = swanlab
         config = _to_builtin(args)
@@ -68,7 +65,7 @@ class ExperimentLogger:
         project = args.get("swanlab_project")
 
         init_kwargs = {
-            "project": self._default_project_name(args) if not project or project == "SPIE" else project,
+            "project": "SPIE" if not project  else project,
             "config": config,
             "group": group,
             "experiment_name": name,
