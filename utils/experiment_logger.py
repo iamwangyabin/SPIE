@@ -207,20 +207,18 @@ class ExperimentLogger:
         if not self.enabled:
             return
 
-        markdown_lines = [
-            "| after_task | " + " | ".join(builtin_labels) + " |",
-            "| " + " | ".join(["---"] * (len(builtin_labels) + 1)) + " |",
-        ]
+        headers = ["after_task"] + list(builtin_labels)
+        rows = []
         for task_idx, row in enumerate(builtin_matrix):
             formatted_row = [f"{float(value):.2f}" for value in row]
-            markdown_lines.append(f"| {task_idx} | " + " | ".join(formatted_row) + " |")
+            rows.append([task_idx] + formatted_row)
+
+        table = self._swanlab.echarts.Table()
+        table.add(headers, rows)
 
         self._swanlab.log(
             {
-                f"summary/{prefix}/accuracy_matrix_text": self._swanlab.Text(
-                    "\n".join(markdown_lines),
-                    caption=f"{prefix.upper()} accuracy matrix",
-                )
+                f"summary/{prefix}/accuracy_matrix": table
             }
         )
 
