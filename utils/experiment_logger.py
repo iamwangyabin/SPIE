@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any, Dict, Iterable, Optional
 
 
@@ -64,9 +65,10 @@ class ExperimentLogger:
         group = args.get("swanlab_group") or self._default_group(args)
         name = args.get("swanlab_experiment_name") or args.get("swanlab_name") or self._default_run_name(args)
         tags = args.get("swanlab_tags", [])
+        project = args.get("swanlab_project")
 
         init_kwargs = {
-            "project": args.get("swanlab_project", "SPIE"),
+            "project": self._default_project_name(args) if not project or project == "SPIE" else project,
             "config": config,
             "group": group,
             "experiment_name": name,
@@ -100,6 +102,11 @@ class ExperimentLogger:
                 f"seed{args.get('seed', 'na')}",
             ]
         )
+
+    def _default_project_name(self, args: Dict[str, Any]) -> str:
+        prefix = _sanitize_text(args.get("prefix", "run"))
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        return f"{prefix}-{date_str}"
 
     def log(self, metrics: Optional[Dict[str, Any]]) -> None:
         if not self.enabled or not metrics:
