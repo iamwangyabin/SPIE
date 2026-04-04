@@ -40,11 +40,16 @@ class ExpertMLPLoRA(nn.Module):
         self.rank = rank
         self.scale = alpha / rank
 
-        self.A = nn.Parameter(torch.zeros(num_experts, dim, rank))
-        self.B = nn.Parameter(torch.zeros(num_experts, rank, dim))
+        self.A = nn.ParameterList([
+            nn.Parameter(torch.empty(dim, rank)) for _ in range(num_experts)
+        ])
+        self.B = nn.ParameterList([
+            nn.Parameter(torch.empty(rank, dim)) for _ in range(num_experts)
+        ])
 
-        nn.init.kaiming_uniform_(self.A, a=5 ** 0.5)
-        nn.init.zeros_(self.B)
+        for a, b in zip(self.A, self.B):
+            nn.init.kaiming_uniform_(a, a=5 ** 0.5)
+            nn.init.zeros_(b)
 
     def forward(self, z: Tensor, expert_indices: Optional[Tensor] = None) -> Tensor:
         if z.ndim != 4:
@@ -55,13 +60,14 @@ class ExpertMLPLoRA(nn.Module):
                 raise ValueError(
                     f"expert_indices is required when K={z.shape[1]} != num_experts={self.num_experts}"
                 )
-            A = self.A
-            B = self.B
+            indices = range(self.num_experts)
         else:
             # 只取当前激活 expert 对应的低秩参数，避免无关 expert 参与前向。
             expert_indices = expert_indices.to(device=z.device, dtype=torch.long)
-            A = self.A.index_select(0, expert_indices)
-            B = self.B.index_select(0, expert_indices)
+            indices = expert_indices.tolist()
+
+        A = torch.stack([self.A[idx] for idx in indices], dim=0)
+        B = torch.stack([self.B[idx] for idx in indices], dim=0)
 
         # LoRA 标准两步：先降维再升维。
         down = torch.einsum("bkmd,kdr->bkmr", z, A)
@@ -256,13 +262,21 @@ class ExpertViT(nn.Module):
         self.model_name = model_name
 
         # 每个 expert 拥有自己的一组可学习 token。
-        self.expert_tokens_param = nn.Parameter(torch.zeros(1, num_experts, expert_tokens, self.embed_dim))
-        nn.init.trunc_normal_(self.expert_tokens_param, std=0.02)
+        self.expert_tokens_param = nn.ParameterList([
+            nn.Parameter(torch.empty(1, expert_tokens, self.embed_dim))
+            for _ in range(num_experts)
+        ])
+        for expert_tokens_param in self.expert_tokens_param:
+            nn.init.trunc_normal_(expert_tokens_param, std=0.02)
 
         if use_expert_pos_embed:
             # expert token 也可以带独立的位置编码。
-            self.expert_pos_embed = nn.Parameter(torch.zeros(1, num_experts, expert_tokens, self.embed_dim))
-            nn.init.trunc_normal_(self.expert_pos_embed, std=0.02)
+            self.expert_pos_embed = nn.ParameterList([
+                nn.Parameter(torch.empty(1, expert_tokens, self.embed_dim))
+                for _ in range(num_experts)
+            ])
+            for expert_pos_embed in self.expert_pos_embed:
+                nn.init.trunc_normal_(expert_pos_embed, std=0.02)
         else:
             self.expert_pos_embed = None
 
@@ -290,12 +304,23 @@ class ExpertViT(nn.Module):
             p.requires_grad = id(p) in expert_ids
 
     def expert_parameters(self) -> Iterable[nn.Parameter]:
-        yield self.expert_tokens_param
+        yield from self.expert_tokens_param
         if self.expert_pos_embed is not None:
-            yield self.expert_pos_embed
+            yield from self.expert_pos_embed
         for block in self.blocks:
-            yield block.expert_lora.A
-            yield block.expert_lora.B
+            yield from block.expert_lora.A
+            yield from block.expert_lora.B
+
+    def expert_parameters_for_expert(self, expert_idx: int) -> Iterable[nn.Parameter]:
+        if not (0 <= expert_idx < self.num_experts):
+            raise ValueError(f"expert_idx must be in [0, {self.num_experts - 1}], got {expert_idx}")
+
+        yield self.expert_tokens_param[expert_idx]
+        if self.expert_pos_embed is not None:
+            yield self.expert_pos_embed[expert_idx]
+        for block in self.blocks:
+            yield block.expert_lora.A[expert_idx]
+            yield block.expert_lora.B[expert_idx]
 
     def shared_parameters(self) -> Iterable[nn.Parameter]:
         expert_ids = {id(p) for p in self.expert_parameters()}
@@ -386,9 +411,9 @@ class ExpertViT(nn.Module):
             raise ValueError(f"active expert index out of range [0, {self.num_experts - 1}]")
 
         # 取出被激活 expert 的 token 参数。
-        z = self.expert_tokens_param.index_select(1, active_indices)
+        z = torch.stack([self.expert_tokens_param[idx] for idx in active_indices.tolist()], dim=1)
         if self.expert_pos_embed is not None:
-            z = z + self.expert_pos_embed.index_select(1, active_indices)
+            z = z + torch.stack([self.expert_pos_embed[idx] for idx in active_indices.tolist()], dim=1)
         return z, active_indices
 
     def forward_features(
@@ -459,14 +484,14 @@ class ExpertViT(nn.Module):
 
         state: Dict[str, Tensor] = {
             "expert_idx": torch.tensor(expert_idx, dtype=torch.long),
-            "expert_tokens_param": self.expert_tokens_param[:, expert_idx:expert_idx + 1].detach().cpu(),
+            "expert_tokens_param": self.expert_tokens_param[expert_idx].unsqueeze(1).detach().cpu(),
         }
         if self.expert_pos_embed is not None:
-            state["expert_pos_embed"] = self.expert_pos_embed[:, expert_idx:expert_idx + 1].detach().cpu()
+            state["expert_pos_embed"] = self.expert_pos_embed[expert_idx].unsqueeze(1).detach().cpu()
 
         for i, block in enumerate(self.blocks):
-            state[f"blocks.{i}.expert_lora.A"] = block.expert_lora.A[expert_idx:expert_idx + 1].detach().cpu()
-            state[f"blocks.{i}.expert_lora.B"] = block.expert_lora.B[expert_idx:expert_idx + 1].detach().cpu()
+            state[f"blocks.{i}.expert_lora.A"] = block.expert_lora.A[expert_idx].unsqueeze(0).detach().cpu()
+            state[f"blocks.{i}.expert_lora.B"] = block.expert_lora.B[expert_idx].unsqueeze(0).detach().cpu()
         return state
 
     @torch.no_grad()
@@ -475,20 +500,32 @@ class ExpertViT(nn.Module):
         if not (0 <= target_expert_idx < self.num_experts):
             raise ValueError(f"target_expert_idx must be in [0, {self.num_experts - 1}], got {target_expert_idx}")
 
-        self.expert_tokens_param[:, target_expert_idx:target_expert_idx + 1].copy_(
-            state["expert_tokens_param"].to(self.expert_tokens_param.device, self.expert_tokens_param.dtype)
+        self.expert_tokens_param[target_expert_idx].copy_(
+            state["expert_tokens_param"].squeeze(1).to(
+                self.expert_tokens_param[target_expert_idx].device,
+                self.expert_tokens_param[target_expert_idx].dtype,
+            )
         )
         if self.expert_pos_embed is not None and "expert_pos_embed" in state:
-            self.expert_pos_embed[:, target_expert_idx:target_expert_idx + 1].copy_(
-                state["expert_pos_embed"].to(self.expert_pos_embed.device, self.expert_pos_embed.dtype)
+            self.expert_pos_embed[target_expert_idx].copy_(
+                state["expert_pos_embed"].squeeze(1).to(
+                    self.expert_pos_embed[target_expert_idx].device,
+                    self.expert_pos_embed[target_expert_idx].dtype,
+                )
             )
 
         for i, block in enumerate(self.blocks):
-            block.expert_lora.A[target_expert_idx:target_expert_idx + 1].copy_(
-                state[f"blocks.{i}.expert_lora.A"].to(block.expert_lora.A.device, block.expert_lora.A.dtype)
+            block.expert_lora.A[target_expert_idx].copy_(
+                state[f"blocks.{i}.expert_lora.A"].squeeze(0).to(
+                    block.expert_lora.A[target_expert_idx].device,
+                    block.expert_lora.A[target_expert_idx].dtype,
+                )
             )
-            block.expert_lora.B[target_expert_idx:target_expert_idx + 1].copy_(
-                state[f"blocks.{i}.expert_lora.B"].to(block.expert_lora.B.device, block.expert_lora.B.dtype)
+            block.expert_lora.B[target_expert_idx].copy_(
+                state[f"blocks.{i}.expert_lora.B"].squeeze(0).to(
+                    block.expert_lora.B[target_expert_idx].device,
+                    block.expert_lora.B[target_expert_idx].dtype,
+                )
             )
 
     def save_single_expert(self, expert_idx: int, path: Union[str, Path]) -> None:
@@ -631,13 +668,14 @@ class IncrementalExpertModel(nn.Module):
     def expert_parameters(self) -> Iterable[nn.Parameter]:
         yield from self.backbone.expert_parameters()
 
+    def expert_parameters_for_expert(self, expert_idx: int) -> Iterable[nn.Parameter]:
+        yield from self.backbone.expert_parameters_for_expert(expert_idx)
+
     def head_parameters(self) -> Iterable[nn.Parameter]:
         yield from self.heads.parameters()
 
     def parameters_for_single_task(self, expert_idx: int) -> Iterable[nn.Parameter]:
-        # 这里返回的是整个 expert 参数库，但由于前向只激活一个 expert，
-        # 实际只有对应槽位会收到非零梯度。
-        yield from self.backbone.expert_parameters()
+        yield from self.backbone.expert_parameters_for_expert(expert_idx)
         yield from self.heads.heads[expert_idx].parameters()
 
     def parameter_groups_for_single_task(
@@ -651,7 +689,7 @@ class IncrementalExpertModel(nn.Module):
         head_lr = lr if head_lr is None else head_lr
         return [
             {
-                "params": list(self.backbone.expert_parameters()),
+                "params": list(self.backbone.expert_parameters_for_expert(expert_idx)),
                 "lr": lr,
                 "weight_decay": expert_weight_decay,
             },
