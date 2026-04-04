@@ -26,6 +26,7 @@ class BaseLearner(object):
         self._device = args["device"][0]
         self._multiple_gpus = args["device"]
         self.args = args
+        self._reset_task_logging()
 
     @property
     def exemplar_size(self):
@@ -148,6 +149,43 @@ class BaseLearner(object):
             total += len(targets)
 
         return np.around(tensor2numpy(correct) * 100 / total, decimals=2)
+
+    def _reset_task_logging(self):
+        self._train_history = []
+        self._extra_history = []
+
+    def _record_train_epoch(self, epoch, total_epochs, loss, acc, lr=None, **extra):
+        entry = {
+            "epoch": epoch,
+            "total_epochs": total_epochs,
+            "loss": loss,
+            "acc": acc,
+            "known_classes": self._known_classes,
+            "total_classes": self._total_classes,
+        }
+        if lr is not None:
+            entry["lr"] = lr
+        entry.update(extra)
+        self._train_history.append(entry)
+
+    def _record_extra_stage_epoch(self, stage, epoch, total_epochs, **metrics):
+        entry = {
+            "stage": stage,
+            "epoch": epoch,
+            "total_epochs": total_epochs,
+            "known_classes": self._known_classes,
+            "total_classes": self._total_classes,
+        }
+        entry.update(metrics)
+        self._extra_history.append(entry)
+
+    def consume_task_logging(self):
+        payload = {
+            "train_history": copy.deepcopy(self._train_history),
+            "extra_history": copy.deepcopy(self._extra_history),
+        }
+        self._reset_task_logging()
+        return payload
 
     def _eval_cnn(self, loader):
         self._network.eval()

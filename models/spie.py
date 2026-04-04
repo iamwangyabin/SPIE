@@ -16,6 +16,8 @@ num_workers = 8
 
 
 def _build_task_class_counts(total_classes: int, init_cls: int, increment: int) -> List[int]:
+    # 根据初始类别数和后续增量步长，预先算出每个 task 对应多少类。
+    # 例如 total=100, init=10, increment=10 -> [10, 10, ..., 10]
     if init_cls <= 0:
         raise ValueError(f"init_cls must be > 0, got {init_cls}")
     if increment <= 0:
@@ -33,6 +35,7 @@ def _build_task_class_counts(total_classes: int, init_cls: int, increment: int) 
 
 
 def _resolve_timm_model_name(backbone_type: str) -> str:
+    # 配置文件里允许写 *_spie 后缀，这里统一还原成 timm 原始模型名。
     name = backbone_type.lower()
     if name.endswith("_spie"):
         name = name[:-5]
@@ -64,8 +67,14 @@ class Learner(BaseLearner):
             init_cls=args["init_cls"],
             increment=args["increment"],
         )
+        # task_offsets[i] 表示第 i 个 expert 的全局类别起始下标。
+        # 后面评估时，需要把 "expert 内部类别 id" 映射回 "全局类别 id"。
         self.task_offsets = np.cumsum([0] + self.task_class_counts[:-1]).tolist()
 
+        # SPiE 的主体模型：
+        # 1. 一个共享 ViT 主干
+        # 2. 每个 task / expert 一组 expert token + expert-only LoRA
+        # 3. 每个 expert 一个自己的分类头
         self._network = IncrementalExpertModel(
             model_name=_resolve_timm_model_name(args["backbone_type"]),
             pretrained=args.get("pretrained", True),
@@ -89,10 +98,13 @@ class Learner(BaseLearner):
         self._known_classes = self._total_classes
 
     def _activate_task_head(self, expert_idx: int) -> None:
+        # 每次只训练当前 task 对应的分类头，其它 head 冻结。
         for i, head in enumerate(self._network.heads.heads):
             head.requires_grad_(i == expert_idx)
 
     def incremental_train(self, data_manager):
+        # 进入下一个增量任务，并更新当前已知类别范围。
+        self._reset_task_logging()
         self._cur_task += 1
         self._total_classes = self._known_classes + data_manager.get_task_size(self._cur_task)
 
@@ -128,12 +140,16 @@ class Learner(BaseLearner):
 
     def _train(self, train_loader, test_loader):
         del test_loader
+        # SPiE 不做额外的 task 后处理，直接完成当前 expert 的训练。
         self._network.to(self._device)
         optimizer = self.get_optimizer()
         scheduler = self.get_scheduler(optimizer)
         self._init_train(train_loader, optimizer, scheduler)
 
     def get_optimizer(self):
+        # 只给当前 task 暴露对应的参数组：
+        # 1. expert 参数（expert token / expert LoRA）
+        # 2. 当前 task 的分类头
         param_groups = self._network.parameter_groups_for_single_task(
             expert_idx=self._cur_task,
             lr=self.init_lr,
@@ -182,8 +198,11 @@ class Learner(BaseLearner):
             for _, inputs, targets in train_loader:
                 inputs = inputs.to(self._device)
                 targets = targets.to(self._device)
+                # 当前 task 的类别标签转成局部标签。
+                # 例如全局类 [20, 21, 22] -> 局部类 [0, 1, 2]
                 local_targets = targets - self._known_classes
 
+                # 训练时只激活一个 expert，因此输出 logits 也是当前 task 的局部类别空间。
                 logits = self._network.forward_train_task(inputs, expert_idx=self._cur_task)
                 loss = F.cross_entropy(logits, local_targets.long())
 
@@ -200,18 +219,29 @@ class Learner(BaseLearner):
                 scheduler.step()
 
             train_acc = np.around(tensor2numpy(correct) * 100 / total, decimals=2)
+            lr = optimizer.param_groups[0]["lr"]
+            avg_loss = losses / len(train_loader)
             info = "Task {}, Epoch {}/{} => Loss {:.3f}, Train_accy {:.2f}".format(
                 self._cur_task,
                 epoch + 1,
                 self.args["tuned_epoch"],
-                losses / len(train_loader),
+                avg_loss,
                 train_acc,
+            )
+            self._record_train_epoch(
+                epoch=epoch + 1,
+                total_epochs=self.args["tuned_epoch"],
+                loss=float(avg_loss),
+                acc=float(train_acc),
+                lr=float(lr),
             )
             prog_bar.set_description(info)
 
         logging.info(info)
 
     def _global_lookup_tensor(self, mapping: List[Dict[str, int]], device: torch.device) -> torch.Tensor:
+        # 把 concat 后的类别位置映射回全局类别 id。
+        # mapping 中每一项都形如 {"expert_idx": i, "local_class_idx": j}
         lookup = [
             self.task_offsets[item["expert_idx"]] + item["local_class_idx"]
             for item in mapping
@@ -221,11 +251,13 @@ class Learner(BaseLearner):
     def _eval_cnn(self, loader):
         self._network.eval()
         y_pred, y_true = [], []
+        # 测试时激活到当前 task 为止的所有 expert。
         active_experts = list(range(self._cur_task + 1))
 
         for _, (_, inputs, targets) in enumerate(loader):
             inputs = inputs.to(self._device)
             with torch.no_grad():
+                # predict_all 会把所有 active experts 的 logits 拼接起来返回。
                 pred = self._network.predict_all(inputs, active_experts=active_experts)
                 logits = pred["logits"]
                 mapping = pred["mapping"]
@@ -233,6 +265,7 @@ class Learner(BaseLearner):
             topk = min(self.topk, logits.shape[1])
             topk_concat = torch.topk(logits, k=topk, dim=1, largest=True, sorted=True)[1]
             global_lookup = self._global_lookup_tensor(mapping, device=logits.device)
+            # 先在拼接空间做 top-k，再映射回真实的全局类别 id。
             predicts = global_lookup[topk_concat]
 
             if topk < self.topk:

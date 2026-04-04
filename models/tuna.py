@@ -98,6 +98,7 @@ class Learner(BaseLearner):
         self._known_classes = self._total_classes
 
     def incremental_train(self, data_manager):
+        self._reset_task_logging()
         self._cur_task += 1
         self._total_classes = self._known_classes + data_manager.get_task_size(self._cur_task)
 
@@ -210,13 +211,22 @@ class Learner(BaseLearner):
             if scheduler:
                 scheduler.step()
             train_acc = np.around(tensor2numpy(correct) * 100 / total, decimals=2)
+            lr = optimizer.param_groups[0]["lr"]
+            avg_loss = losses / len(train_loader)
 
             info = "Task {}, Epoch {}/{} => Loss {:.3f}, Train_accy {:.2f}".format(
                 self._cur_task,
                 epoch + 1,
                 self.args['tuned_epoch'],
-                losses / len(train_loader),
+                avg_loss,
                 train_acc,
+            )
+            self._record_train_epoch(
+                epoch=epoch + 1,
+                total_epochs=self.args["tuned_epoch"],
+                loss=float(avg_loss),
+                acc=float(train_acc),
+                lr=float(lr),
             )
             prog_bar.set_description(info)
 
@@ -347,12 +357,22 @@ class Learner(BaseLearner):
 
             scheduler.step()
             ca_acc = np.round(tensor2numpy(correct) * 100 / total, decimals=2)
+            avg_loss = losses / self._total_classes
+            lr = optimizer.param_groups[0]["lr"]
             info = "Task {}, Epoch {}/{} => Loss {:.3f}, CA_accy {:.2f}".format(
                 self._cur_task,
                 epoch + 1,
                 self.crct_epochs,
-                losses / self._total_classes,
+                avg_loss,
                 ca_acc,
+            )
+            self._record_extra_stage_epoch(
+                stage="classifier_align",
+                epoch=epoch + 1,
+                total_epochs=self.crct_epochs,
+                loss=float(avg_loss),
+                acc=float(ca_acc),
+                lr=float(lr),
             )
             prog_bar.set_description(info)
 
