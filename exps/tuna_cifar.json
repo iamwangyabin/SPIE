@@ -11,6 +11,9 @@
     "backbone_type": "vit_base_patch16_224_in21k_tuna",
     "device": ["2"],
     "seed": [1993],
+    "wandb": true,
+    "wandb_project": "SPIE",
+    "wandb_mode": "online",
 
     "tuned_epoch": 15,
     "init_lr": 0.01,
