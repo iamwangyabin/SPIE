@@ -46,43 +46,40 @@ def _to_builtin(value: Any) -> Any:
 class ExperimentLogger:
     def __init__(self, args: Dict[str, Any]):
         self.args = args
-        self.enabled = bool(args.get("wandb", False))
+        self.enabled = bool(args.get("swanlab", False))
         self.run = None
 
         if not self.enabled:
             return
 
         try:
-            import wandb
+            import swanlab
         except ImportError as exc:
             raise ImportError(
-                "wandb logging was enabled, but the 'wandb' package is not installed."
+                "swanlab logging was enabled, but the 'swanlab' package is not installed."
             ) from exc
 
-        self._wandb = wandb
+        self._swanlab = swanlab
         config = _to_builtin(args)
-        group = args.get("wandb_group") or self._default_group(args)
-        name = args.get("wandb_name") or self._default_run_name(args)
-        tags = args.get("wandb_tags", [])
+        group = args.get("swanlab_group") or self._default_group(args)
+        name = args.get("swanlab_experiment_name") or args.get("swanlab_name") or self._default_run_name(args)
+        tags = args.get("swanlab_tags", [])
 
         init_kwargs = {
-            "project": args.get("wandb_project", "SPIE"),
+            "project": args.get("swanlab_project", "SPIE"),
             "config": config,
             "group": group,
-            "name": name,
+            "experiment_name": name,
             "tags": tags,
-            "mode": args.get("wandb_mode", "online"),
+            "mode": args.get("swanlab_mode", "online"),
+            "description": args.get("swanlab_description"),
         }
-        if args.get("wandb_entity"):
-            init_kwargs["entity"] = args["wandb_entity"]
+        if args.get("swanlab_workspace"):
+            init_kwargs["workspace"] = args["swanlab_workspace"]
+        if args.get("swanlab_logdir"):
+            init_kwargs["logdir"] = args["swanlab_logdir"]
 
-        self.run = wandb.init(**init_kwargs)
-        wandb.define_metric("train/global_epoch")
-        wandb.define_metric("train/*", step_metric="train/global_epoch")
-        wandb.define_metric("extra/global_epoch")
-        wandb.define_metric("extra/*", step_metric="extra/global_epoch")
-        wandb.define_metric("eval/task_id")
-        wandb.define_metric("eval/*", step_metric="eval/task_id")
+        self.run = swanlab.init(**init_kwargs)
 
     def _default_group(self, args: Dict[str, Any]) -> str:
         return "-".join(
@@ -107,7 +104,7 @@ class ExperimentLogger:
     def log(self, metrics: Optional[Dict[str, Any]]) -> None:
         if not self.enabled or not metrics:
             return
-        self._wandb.log(_to_builtin(metrics))
+        self._swanlab.log(_to_builtin(metrics))
 
     def log_train_history(self, task_id: int, train_history: Iterable[Dict[str, Any]]) -> None:
         for item in train_history:
@@ -125,7 +122,7 @@ class ExperimentLogger:
                 if key in {"epoch", "total_epochs", "known_classes", "total_classes"}:
                     continue
                 payload[f"train/{key}"] = value
-            self.log(payload)
+            self._swanlab.log(_to_builtin(payload), step=global_epoch)
 
     def log_extra_history(self, task_id: int, extra_history: Iterable[Dict[str, Any]]) -> None:
         for item in extra_history:
@@ -144,7 +141,7 @@ class ExperimentLogger:
                 if key in {"stage", "epoch", "total_epochs", "known_classes", "total_classes"}:
                     continue
                 payload[f"extra/{stage}/{key}"] = value
-            self.log(payload)
+            self._swanlab.log(_to_builtin(payload), step=global_epoch)
 
     def log_eval(
         self,
@@ -173,7 +170,7 @@ class ExperimentLogger:
             if avg_nme is not None:
                 payload["eval/nme/avg_top1"] = avg_nme
 
-        self.log(payload)
+        self._swanlab.log(_to_builtin(payload), step=task_id)
 
     def _flatten_eval_metrics(self, prefix: str, accy: Dict[str, Any]) -> Dict[str, Any]:
         payload = {
@@ -193,10 +190,9 @@ class ExperimentLogger:
     def log_summary(self, metrics: Dict[str, Any]) -> None:
         if not metrics:
             return
-        self.log(metrics)
-        if self.enabled and self.run is not None:
-            for key, value in _to_builtin(metrics).items():
-                self.run.summary[key] = value
+        if not self.enabled:
+            return
+        self._swanlab.log(_to_builtin(metrics))
 
     def log_accuracy_matrix(self, prefix: str, matrix, column_labels) -> None:
         if matrix is None or len(matrix) == 0:
@@ -204,22 +200,26 @@ class ExperimentLogger:
 
         builtin_matrix = _to_builtin(matrix)
         builtin_labels = _to_builtin(column_labels)
-        summary_metrics = {
-            f"summary/{prefix}/accuracy_matrix": builtin_matrix,
-            f"summary/{prefix}/accuracy_matrix_labels": builtin_labels,
-        }
-        self.log_summary(summary_metrics)
-
-        if not self.enabled or self.run is None:
+        if not self.enabled:
             return
 
-        table_columns = ["after_task"] + list(builtin_labels)
-        table_data = []
+        markdown_lines = [
+            "| after_task | " + " | ".join(builtin_labels) + " |",
+            "| " + " | ".join(["---"] * (len(builtin_labels) + 1)) + " |",
+        ]
         for task_idx, row in enumerate(builtin_matrix):
-            table_data.append([task_idx] + list(row))
-        matrix_table = self._wandb.Table(columns=table_columns, data=table_data)
-        self._wandb.log({f"summary/{prefix}/accuracy_matrix_table": matrix_table})
+            formatted_row = [f"{float(value):.2f}" for value in row]
+            markdown_lines.append(f"| {task_idx} | " + " | ".join(formatted_row) + " |")
+
+        self._swanlab.log(
+            {
+                f"summary/{prefix}/accuracy_matrix_text": self._swanlab.Text(
+                    "\n".join(markdown_lines),
+                    caption=f"{prefix.upper()} accuracy matrix",
+                )
+            }
+        )
 
     def finish(self) -> None:
         if self.enabled and self.run is not None:
-            self._wandb.finish()
+            self._swanlab.finish()
