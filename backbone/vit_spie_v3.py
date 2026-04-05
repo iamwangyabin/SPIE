@@ -52,7 +52,7 @@ class ExpertMLPLoRABlock(nn.Module):
         self.mlp_drop = base_block.mlp_drop
         self.expert_tokens = int(expert_tokens)
 
-    def _forward_attention(self, x, attn_mask=None, lora=None, num_backbone_tokens=None):
+    def _forward_attention(self, x, attn_mask=None, lora=None, num_expert_tokens=None):
         bsz, seq_len, dim = x.shape
         num_heads = self.attn.num_heads
         head_dim = self.attn.head_dim
@@ -84,27 +84,27 @@ class ExpertMLPLoRABlock(nn.Module):
         proj_output = self.attn.proj_drop(proj_output)
         return proj_output
 
-    def forward(self, x, lora=None, attn_mask=None, num_backbone_tokens=None):
+    def forward(self, x, lora=None, attn_mask=None, num_expert_tokens=None):
         norm1_x = self.norm1(x)
         x = x + self.drop_path(
             self._forward_attention(
                 norm1_x,
                 attn_mask=attn_mask,
                 lora=lora,
-                num_backbone_tokens=num_backbone_tokens,
+                num_expert_tokens=num_expert_tokens,
             )
         )
 
         residual = x
         norm2_x = self.norm2(x)
         hidden = self.fc1(norm2_x)
-        if lora is not None and num_backbone_tokens is not None and x.shape[1] > num_backbone_tokens:
-            hidden[:, num_backbone_tokens:, :] += lora.fc1_lora(norm2_x[:, num_backbone_tokens:, :])
+        if lora is not None and num_expert_tokens is not None and num_expert_tokens > 0:
+            hidden[:, :num_expert_tokens, :] += lora.fc1_lora(norm2_x[:, :num_expert_tokens, :])
 
         hidden = self.mlp_drop(self.act(hidden))
         out = self.fc2(hidden)
-        if lora is not None and num_backbone_tokens is not None and x.shape[1] > num_backbone_tokens:
-            out[:, num_backbone_tokens:, :] += lora.fc2_lora(hidden[:, num_backbone_tokens:, :])
+        if lora is not None and num_expert_tokens is not None and num_expert_tokens > 0:
+            out[:, :num_expert_tokens, :] += lora.fc2_lora(hidden[:, :num_expert_tokens, :])
 
         out = self.drop_path(self.mlp_drop(out))
         x = residual + out
@@ -184,9 +184,8 @@ class VisionTransformer(TunaMaxVisionTransformer):
 
         total_tokens = num_backbone_tokens + num_expert_tokens
         mask = torch.full((total_tokens, total_tokens), float("-inf"), device=device, dtype=dtype)
-        mask[:num_backbone_tokens, :num_backbone_tokens] = 0.0
-        mask[num_backbone_tokens:, :num_backbone_tokens] = 0.0
-        mask[num_backbone_tokens:, num_backbone_tokens:] = 0.0
+        mask[:num_expert_tokens, :] = 0.0
+        mask[num_expert_tokens:, num_expert_tokens:] = 0.0
 
         self._mask_cache[key] = mask
         return mask
@@ -214,13 +213,14 @@ class VisionTransformer(TunaMaxVisionTransformer):
         num_backbone_tokens = x.shape[1]
 
         expert_tokens = self._select_expert_tokens(adapter_id, train)
+        num_expert_tokens = 0 if expert_tokens is None else self.expert_tokens
         if expert_tokens is not None:
-            x = torch.cat((x, expert_tokens.expand(bsz, -1, -1)), dim=1)
+            x = torch.cat((expert_tokens.expand(bsz, -1, -1), x), dim=1)
 
         x = self.pos_drop(x)
         attn_mask = self._build_attn_mask(
             num_backbone_tokens=num_backbone_tokens,
-            num_expert_tokens=0 if expert_tokens is None else self.expert_tokens,
+            num_expert_tokens=num_expert_tokens,
             device=x.device,
             dtype=x.dtype,
         )
@@ -232,20 +232,20 @@ class VisionTransformer(TunaMaxVisionTransformer):
                 x,
                 lora=lora,
                 attn_mask=attn_mask,
-                num_backbone_tokens=num_backbone_tokens,
+                num_expert_tokens=num_expert_tokens,
             )
 
         if self.global_pool:
-            x = x[:, 1:, :].mean(dim=1)
+            x = x[:, num_expert_tokens + 1 :, :].mean(dim=1)
             cls_features = self.fc_norm(x)
             expert_features = cls_features
         else:
             x = self.norm(x)
-            cls_features = x[:, 0]
+            cls_features = x[:, num_expert_tokens]
             if expert_tokens is None:
                 expert_features = cls_features
             else:
-                expert_features = x[:, -self.expert_tokens :, :].mean(dim=1)
+                expert_features = x[:, :num_expert_tokens, :].mean(dim=1)
 
         return {
             "x": expert_features,
