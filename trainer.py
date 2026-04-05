@@ -182,13 +182,11 @@ def _train(args):
                 logging.info("Average Accuracy (CNN): {:.2f} \n".format(avg_cnn))
 
             experiment_logger.log_eval(
-                task_id=task,
                 cnn_accy=cnn_accy,
                 nme_accy=nme_accy,
+                step=task,
                 avg_cnn=avg_cnn,
                 avg_nme=avg_nme,
-                all_params=all_params,
-                trainable_params=trainable_params,
             )
 
         summary_metrics = {}

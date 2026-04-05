@@ -113,15 +113,7 @@ class ExperimentLogger:
     def log_train_history(self, task_id: int, train_history: Iterable[Dict[str, Any]]) -> None:
         for item in train_history:
             global_epoch = task_id * item["total_epochs"] + item["epoch"]
-            payload = {
-                "train/global_epoch": global_epoch,
-                "train/task_id": task_id,
-                "train/epoch": item["epoch"],
-                "train/epoch_in_task": item["epoch"],
-                "train/total_epochs": item["total_epochs"],
-                "train/known_classes": item.get("known_classes"),
-                "train/total_classes": item.get("total_classes"),
-            }
+            payload = {}
             for key, value in item.items():
                 if key in {"epoch", "total_epochs", "known_classes", "total_classes"}:
                     continue
@@ -133,14 +125,7 @@ class ExperimentLogger:
             stage = item["stage"]
             total_epochs = item["total_epochs"]
             global_epoch = task_id * total_epochs + item["epoch"]
-            payload = {
-                "extra/global_epoch": global_epoch,
-                "extra/task_id": task_id,
-                "extra/stage_epoch": item["epoch"],
-                "extra/total_epochs": total_epochs,
-                "extra/known_classes": item.get("known_classes"),
-                "extra/total_classes": item.get("total_classes"),
-            }
+            payload = {}
             for key, value in item.items():
                 if key in {"stage", "epoch", "total_epochs", "known_classes", "total_classes"}:
                     continue
@@ -149,22 +134,13 @@ class ExperimentLogger:
 
     def log_eval(
         self,
-        task_id: int,
         cnn_accy: Dict[str, Any],
         nme_accy: Optional[Dict[str, Any]],
+        step: int,
         avg_cnn: Optional[float] = None,
         avg_nme: Optional[float] = None,
-        all_params: Optional[int] = None,
-        trainable_params: Optional[int] = None,
     ) -> None:
-        payload = {
-            "eval/task_id": task_id,
-        }
-        if all_params is not None:
-            payload["eval/model/all_params"] = all_params
-        if trainable_params is not None:
-            payload["eval/model/trainable_params"] = trainable_params
-
+        payload = {}
         payload.update(self._flatten_eval_metrics("cnn", cnn_accy))
         if avg_cnn is not None:
             payload["eval/cnn/avg_top1"] = avg_cnn
@@ -174,7 +150,7 @@ class ExperimentLogger:
             if avg_nme is not None:
                 payload["eval/nme/avg_top1"] = avg_nme
 
-        self._swanlab.log(_to_builtin(payload), step=task_id)
+        self._swanlab.log(_to_builtin(payload), step=step)
 
     def _flatten_eval_metrics(self, prefix: str, accy: Dict[str, Any]) -> Dict[str, Any]:
         payload = {
