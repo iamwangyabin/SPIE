@@ -15,7 +15,7 @@
     "swanlab_project": "SPIE",
     "swanlab_mode": "online",
 
-    "tuned_epoch": 15,
+    "tuned_epoch": 30,
     "init_lr": 0.01,
     "batch_size": 16,
     "weight_decay": 0.0005,
@@ -36,7 +36,7 @@
     "drop": 0.0,
     "drop_path": 0.0,
     "r": 16,
-    "expert_tokens": 4,
+    "expert_tokens": 1,
     "scale": 20.0,
     "m": 0.0
 }
