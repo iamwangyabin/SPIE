@@ -4,10 +4,12 @@ def get_model(model_name, args):
         from models.tuna import Learner
     elif name == "tunamax":
         from models.tunamax import Learner
+    elif name == "spie_v2":
+        from models.spie_v2 import Learner
     elif name == "spie":
         from models.spie import Learner
     elif name == "onlymax":
         from models.onlymax import Learner
     else:
-        raise ValueError("Supported model names are 'tuna', 'tunamax', 'spie', and 'onlymax'.")
+        raise ValueError("Supported model names are 'tuna', 'tunamax', 'spie_v2', 'spie', and 'onlymax'.")
     return Learner(args)

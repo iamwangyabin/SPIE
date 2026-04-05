@@ -234,6 +234,74 @@ def get_backbone(args, pretrained=False):
             else:
                 raise NotImplementedError("Unknown type {}".format(name))
             return model
+    elif "_spie_v2" in name:
+        ffn_num = 16
+        from backbone import vit_spie_v2
+        from easydict import EasyDict
+        tuning_config = EasyDict(
+            ffn_adapt=True,
+            ffn_option="parallel",
+            ffn_adapter_layernorm_option="none",
+            ffn_adapter_init_option="lora",
+            ffn_adapter_scalar="0.1",
+            ffn_num=ffn_num,
+            d_model=768,
+            _device=args["device"][0],
+            vpt_on=False,
+            vpt_num=0,
+        )
+        if name == "vit_base_patch16_224_spie_v2":
+            model = vit_spie_v2.vit_base_patch16_224_spie_v2(
+                num_classes=args["nb_classes"],
+                global_pool=False,
+                drop_path_rate=0.0,
+                tuning_config=tuning_config,
+                r=args["r"],
+                expert_tokens=args.get("expert_tokens", 4),
+            )
+        elif name == "vit_base_patch16_224_in21k_spie_v2":
+            model = vit_spie_v2.vit_base_patch16_224_in21k_spie_v2(
+                num_classes=args["nb_classes"],
+                global_pool=False,
+                drop_path_rate=0.0,
+                tuning_config=tuning_config,
+                r=args["r"],
+                expert_tokens=args.get("expert_tokens", 4),
+            )
+        else:
+            raise NotImplementedError("Unknown type {}".format(name))
+        return model
+    elif '_tunamax' in name:
+        ffn_num = 16
+        from backbone import vit_tunamax
+        from easydict import EasyDict
+        tuning_config = EasyDict(
+            # AdaptFormer
+            ffn_adapt=True,
+            ffn_option="parallel",
+            ffn_adapter_layernorm_option="none",
+            ffn_adapter_init_option="lora",
+            ffn_adapter_scalar="0.1",
+            ffn_num=ffn_num,
+            d_model=768,
+            _device=args["device"][0],
+            # VPT related
+            vpt_on=False,
+            vpt_num=0,
+        )
+        if name == "vit_base_patch16_224_tunamax":
+            model = vit_tunamax.vit_base_patch16_224_tunamax(num_classes=args["nb_classes"],
+                                                             global_pool=False, drop_path_rate=0.0,
+                                                             tuning_config=tuning_config,
+                                                             r=args["r"])
+        elif name == "vit_base_patch16_224_in21k_tunamax":
+            model = vit_tunamax.vit_base_patch16_224_in21k_tunamax(num_classes=args["nb_classes"],
+                                                                   global_pool=False, drop_path_rate=0.0,
+                                                                   tuning_config=tuning_config,
+                                                                   r=args["r"])
+        else:
+            raise NotImplementedError("Unknown type {}".format(name))
+        return model
     elif '_tuna' in name:
         ffn_num = 16
         from backbone import vit_tuna
