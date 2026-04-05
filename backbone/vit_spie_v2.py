@@ -87,11 +87,19 @@ class VisionTransformer(TunaMaxVisionTransformer):
             raise ValueError(f"expert_tokens must be > 0, got {expert_tokens}")
 
         self.expert_tokens = int(expert_tokens)
-        self.cur_expert_tokens = nn.Parameter(torch.zeros(1, self.expert_tokens, self.embed_dim))
-        nn.init.trunc_normal_(self.cur_expert_tokens, std=0.02)
+        self.cur_expert_tokens = self._init_expert_tokens_from_cls()
         self.expert_token_list = nn.ParameterList()
         self.blocks = nn.ModuleList([ExpertIsolatedBlock(block, self.expert_tokens) for block in self.blocks])
         self._mask_cache = {}
+
+    def _init_expert_tokens_from_cls(self):
+        return nn.Parameter(self.cls_token.detach().clone().expand(1, self.expert_tokens, -1).clone())
+
+    def reset_task_modules(self):
+        # Each incremental task should get a fresh expert branch instead of
+        # continuing to optimize the previous task's expert parameters.
+        self.init_adapters()
+        self.cur_expert_tokens = self._init_expert_tokens_from_cls()
 
     def freeze(self):
         for param in self.parameters():

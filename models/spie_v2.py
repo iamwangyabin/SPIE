@@ -1,6 +1,9 @@
 import logging
 
+import numpy as np
+import torch
 from torch import nn, optim
+from torch.utils.data import DataLoader
 
 from models.base import BaseLearner
 from models.tunamax import Learner as TunaMaxLearner
@@ -42,6 +45,61 @@ class Learner(TunaMaxLearner):
             for name, param in self._network.named_parameters():
                 if param.requires_grad:
                     logging.info("{}: {}".format(name, param.numel()))
+
+    def incremental_train(self, data_manager):
+        self._reset_task_logging()
+        self._cur_task += 1
+        self._total_classes = self._known_classes + data_manager.get_task_size(self._cur_task)
+
+        for i in range(self._known_classes, self._total_classes):
+            self.cls2task[i] = self._cur_task
+
+        self._network.update_fc(self._total_classes - self._known_classes)
+        logging.info("Learning on {}-{}".format(self._known_classes, self._total_classes))
+
+        if self._cur_task > 0:
+            backbone = self._backbone_module()
+            backbone.reset_task_modules()
+
+        self.train_dataset = data_manager.get_dataset(
+            np.arange(self._known_classes, self._total_classes),
+            source="train",
+            mode="train",
+        )
+        self.data_manager = data_manager
+        self.train_loader = DataLoader(
+            self.train_dataset,
+            batch_size=self.batch_size,
+            shuffle=True,
+            num_workers=8,
+        )
+        test_dataset = data_manager.get_dataset(np.arange(0, self._total_classes), source="test", mode="test")
+        self.test_loader = DataLoader(
+            test_dataset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=8,
+        )
+
+        train_dataset_for_protonet = data_manager.get_dataset(
+            np.arange(self._known_classes, self._total_classes),
+            source="train",
+            mode="test",
+        )
+        self.train_loader_for_protonet = DataLoader(
+            train_dataset_for_protonet,
+            batch_size=self.batch_size,
+            shuffle=True,
+            num_workers=8,
+        )
+
+        if len(self._multiple_gpus) > 1:
+            self._network.backbone = nn.DataParallel(self._network.backbone, self._multiple_gpus)
+
+        self._train(self.train_loader, self.test_loader)
+
+        if len(self._multiple_gpus) > 1:
+            self._network.backbone = self._backbone_module()
 
     def get_optimizer(self, model):
         base_params = [
