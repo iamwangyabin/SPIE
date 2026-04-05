@@ -25,15 +25,11 @@ class LoRALinear(nn.Module):
         return self.up_proj(self.down_proj(x)) * self.scale
 
 
-class ExpertTokenFullLoRA(nn.Module):
-    """Full LoRA stack that only updates the expert-token sub-sequence."""
+class ExpertTokenMLPLoRA(nn.Module):
+    """MLP-only LoRA stack that only updates the expert-token sub-sequence."""
 
     def __init__(self, dim, mlp_hidden_dim, rank=8, alpha=1.0):
         super().__init__()
-        self.q_lora = LoRALinear(dim, dim, rank=rank, alpha=alpha)
-        self.k_lora = LoRALinear(dim, dim, rank=rank, alpha=alpha)
-        self.v_lora = LoRALinear(dim, dim, rank=rank, alpha=alpha)
-        self.proj_lora = LoRALinear(dim, dim, rank=rank, alpha=alpha)
         self.fc1_lora = LoRALinear(dim, mlp_hidden_dim, rank=rank, alpha=alpha)
         self.fc2_lora = LoRALinear(mlp_hidden_dim, dim, rank=rank, alpha=alpha)
 
@@ -41,8 +37,8 @@ class ExpertTokenFullLoRA(nn.Module):
         self.up_proj = self.fc2_lora.up_proj
 
 
-class ExpertFullLoRABlock(nn.Module):
-    """SPiE-style block wrapper with token-isolated attention and full LoRA on expert tokens."""
+class ExpertMLPLoRABlock(nn.Module):
+    """SPiE-style block wrapper with token-isolated attention and MLP-only LoRA on expert tokens."""
 
     def __init__(self, base_block, expert_tokens):
         super().__init__()
@@ -65,12 +61,6 @@ class ExpertFullLoRABlock(nn.Module):
         k = self.attn.k_proj(x)
         v = self.attn.v_proj(x)
 
-        if lora is not None and num_backbone_tokens is not None and seq_len > num_backbone_tokens:
-            expert_x = x[:, num_backbone_tokens:, :]
-            q[:, num_backbone_tokens:, :] += lora.q_lora(expert_x)
-            k[:, num_backbone_tokens:, :] += lora.k_lora(expert_x)
-            v[:, num_backbone_tokens:, :] += lora.v_lora(expert_x)
-
         q = self.attn._shape(q, seq_len, bsz).view(bsz * num_heads, seq_len, head_dim)
         k = self.attn._shape(k, -1, bsz).view(bsz * num_heads, -1, head_dim)
         v = self.attn._shape(v, -1, bsz).view(bsz * num_heads, -1, head_dim)
@@ -90,10 +80,6 @@ class ExpertFullLoRABlock(nn.Module):
         attn_output = attn_output.view(bsz, num_heads, seq_len, head_dim)
         attn_output = attn_output.transpose(1, 2).reshape(bsz, seq_len, dim)
         proj_output = self.attn.proj(attn_output)
-
-        if lora is not None and num_backbone_tokens is not None and seq_len > num_backbone_tokens:
-            expert_attn_output = attn_output[:, num_backbone_tokens:, :]
-            proj_output[:, num_backbone_tokens:, :] += lora.proj_lora(expert_attn_output)
 
         proj_output = self.attn.proj_drop(proj_output)
         return proj_output
@@ -126,7 +112,7 @@ class ExpertFullLoRABlock(nn.Module):
 
 
 class VisionTransformer(TunaMaxVisionTransformer):
-    """TunaMax-style ViT with per-task expert tokens and expert-token-only full LoRA."""
+    """TunaMax-style ViT with per-task expert tokens and expert-token-only MLP LoRA."""
 
     def __init__(self, *args, expert_tokens=4, lora_rank=8, lora_alpha=1.0, **kwargs):
         self.lora_rank = int(lora_rank)
@@ -138,13 +124,13 @@ class VisionTransformer(TunaMaxVisionTransformer):
         self.expert_tokens = int(expert_tokens)
         self.cur_expert_tokens = self._init_expert_tokens_from_cls()
         self.expert_token_list = nn.ParameterList()
-        self.blocks = nn.ModuleList([ExpertFullLoRABlock(block, self.expert_tokens) for block in self.blocks])
+        self.blocks = nn.ModuleList([ExpertMLPLoRABlock(block, self.expert_tokens) for block in self.blocks])
         self._mask_cache = {}
 
     def init_adapters(self):
         self.cur_adapter = nn.ModuleList()
         for block in self.blocks:
-            adapter = ExpertTokenFullLoRA(
+            adapter = ExpertTokenMLPLoRA(
                 dim=block.norm1.normalized_shape[0],
                 mlp_hidden_dim=block.fc1.out_features,
                 rank=self.lora_rank,
