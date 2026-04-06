@@ -72,6 +72,18 @@ class VisionTransformer(SPiEV3VisionTransformer):
             "fused_features": fused_features,
         }
 
+    def forward_head(self, res):
+        res["logits"] = res["x"]
+        return res
+
+    def forward(self, x, adapter_id=-1, train=False, fc_only=False):
+        if fc_only:
+            return {"logits": x}
+
+        res = self.forward_features(x, adapter_id, train)
+        res = self.forward_head(res)
+        return res
+
 
 def vit_base_patch16_224_spie_v4(pretrained=False, **kwargs):
     del pretrained

@@ -15,7 +15,7 @@
     "swanlab_project": "SPIE",
     "swanlab_mode": "online",
 
-    "tuned_epoch": 30,
+    "tuned_epoch": 15,
     "init_lr": 0.01,
     "batch_size": 16,
     "weight_decay": 0.0005,
