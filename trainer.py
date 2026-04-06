@@ -1,6 +1,7 @@
 import sys
 import logging
 import copy
+from datetime import datetime
 import torch
 from utils import factory
 from utils.data_manager import DataManager
@@ -28,6 +29,38 @@ def _format_average(values):
 
 def _average_float(values):
     return round(sum(values) / len(values), 2)
+
+
+def _sanitize_path_component(value):
+    text = str(value).strip()
+    if not text:
+        return "default"
+    sanitized = []
+    for char in text:
+        if char.isalnum() or char in {"-", "_", "."}:
+            sanitized.append(char)
+        else:
+            sanitized.append("-")
+    return "".join(sanitized).strip("-") or "default"
+
+
+def _build_run_name(args):
+    parts = []
+    prefix = str(args.get("prefix", "")).strip()
+    if prefix:
+        parts.append(prefix)
+    parts.extend([
+        args.get("model_name", "model"),
+        args.get("dataset", "dataset"),
+        f"init{args.get('init_cls', 'na')}",
+        f"inc{args.get('increment', 'na')}",
+        f"seed{args.get('seed', 'na')}",
+    ])
+    note = str(args.get("note", "")).strip()
+    if note:
+        parts.append(note)
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return "_".join(_sanitize_path_component(part) for part in parts) + "_" + timestamp
 
 
 def _compute_forgetting(matrix, task_idx):
@@ -64,34 +97,30 @@ def train(args):
 
 
 def _train(args):
+    run_name = _build_run_name(args)
+    run_dir = os.path.join("logs", run_name)
+    checkpoint_dir = os.path.join(run_dir, "checkpoints")
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    logfilename = os.path.join(run_dir, "train.log")
+    args["run_dir"] = run_dir
+    args["checkpoint_dir"] = checkpoint_dir
+    args["log_path"] = logfilename
 
-    init_cls = 0 if args ["init_cls"] == args["increment"] else args["init_cls"]
-    logs_name = "logs/{}/{}/{}/{}".format(args["model_name"],args["dataset"], init_cls, args['increment'])
-    
-    if not os.path.exists(logs_name):
-        os.makedirs(logs_name)
-
-    logfilename = "logs/{}/{}/{}/{}/{}_{}_{}".format(
-        args["model_name"],
-        args["dataset"],
-        init_cls,
-        args["increment"],
-        args["prefix"],
-        args["seed"],
-        args["backbone_type"],
-    )
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(filename)s] => %(message)s",
         handlers=[
-            logging.FileHandler(filename=logfilename + ".log"),
+            logging.FileHandler(filename=logfilename),
             logging.StreamHandler(sys.stdout),
         ],
+        force=True,
     )
 
     _set_random(args["seed"])
     _set_device(args)
     print_args(args)
+    logging.info("Run directory: %s", run_dir)
+    logging.info("Checkpoint directory: %s", checkpoint_dir)
 
     data_manager = DataManager(
         args["dataset"],
@@ -126,6 +155,18 @@ def _train(args):
 
             cnn_accy, nme_accy = model.eval_task()
             model.after_task()
+            model.save_checkpoint(
+                os.path.join(checkpoint_dir, "task"),
+                extra={
+                    "cnn_accy": _to_builtin(cnn_accy),
+                    "nme_accy": _to_builtin(nme_accy),
+                    "task_id": task,
+                },
+            )
+            logging.info(
+                "Saved checkpoint: %s",
+                os.path.join(checkpoint_dir, f"task_{task}.pkl"),
+            )
 
             avg_cnn = _average_float(cnn_curve["top1"] + [cnn_accy["top1"]])
             avg_nme = None

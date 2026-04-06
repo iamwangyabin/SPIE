@@ -1,6 +1,7 @@
 import copy
 import logging
 import numpy as np
+from pathlib import Path
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
@@ -90,13 +91,21 @@ class BaseLearner(object):
         plt.close()
 
 
-    def save_checkpoint(self, filename):
-        self._network.cpu()
+    def save_checkpoint(self, filename, extra=None):
+        checkpoint_path = Path("{}_{}.pkl".format(filename, self._cur_task))
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         save_dict = {
             "tasks": self._cur_task,
-            "model_state_dict": self._network.state_dict(),
+            "known_classes": self._known_classes,
+            "total_classes": self._total_classes,
+            "model_state_dict": {
+                key: value.detach().cpu()
+                for key, value in self._network.state_dict().items()
+            },
         }
-        torch.save(save_dict, "{}_{}.pkl".format(filename, self._cur_task))
+        if extra:
+            save_dict.update(extra)
+        torch.save(save_dict, checkpoint_path)
 
     def after_task(self):
         pass
