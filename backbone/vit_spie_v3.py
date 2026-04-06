@@ -114,9 +114,18 @@ class ExpertMLPLoRABlock(nn.Module):
 class VisionTransformer(TunaMaxVisionTransformer):
     """TunaMax-style ViT with per-task expert tokens and expert-token-only MLP LoRA."""
 
-    def __init__(self, *args, expert_tokens=4, lora_rank=8, lora_alpha=1.0, **kwargs):
+    def __init__(
+        self,
+        *args,
+        expert_tokens=4,
+        lora_rank=8,
+        lora_alpha=1.0,
+        feature_fusion_alpha=1.0,
+        **kwargs,
+    ):
         self.lora_rank = int(lora_rank)
         self.lora_alpha = float(lora_alpha)
+        self.feature_fusion_alpha = float(feature_fusion_alpha)
         super().__init__(*args, **kwargs)
         if expert_tokens <= 0:
             raise ValueError(f"expert_tokens must be > 0, got {expert_tokens}")
@@ -247,12 +256,20 @@ class VisionTransformer(TunaMaxVisionTransformer):
             else:
                 expert_features = x[:, :num_expert_tokens, :].mean(dim=1)
 
+        if expert_tokens is None:
+            fused_features = cls_features
+        else:
+            # Use CLS as the shared anchor and the pooled expert tokens as the
+            # task-specific residual for both train and eval.
+            fused_features = cls_features + self.feature_fusion_alpha * expert_features
+
         return {
-            "x": expert_features,
-            "pre_logits": expert_features,
-            "features": expert_features,
+            "x": fused_features,
+            "pre_logits": fused_features,
+            "features": fused_features,
             "cls_features": cls_features,
             "expert_features": expert_features,
+            "fused_features": fused_features,
         }
 
 

@@ -39,6 +39,7 @@
     "expert_tokens": 4,
     "lora_rank": 8,
     "lora_alpha": 1.0,
+    "feature_fusion_alpha": 1.0,
     "scale": 20.0,
     "m": 0.0
 }

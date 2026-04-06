@@ -19,6 +19,12 @@ def setup_parser():
     parser = argparse.ArgumentParser(description='Reproduce of multiple pre-trained incremental learning algorthms.')
     parser.add_argument('--config', type=str, default='./exps/tuna_cifar.json',
                         help='Json file of settings.')
+    parser.add_argument(
+        '--note',
+        type=str,
+        default='',
+        help='Optional note appended to the experiment display name.',
+    )
     return parser
 
 if __name__ == '__main__':

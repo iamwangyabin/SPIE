@@ -93,12 +93,10 @@ class ExperimentLogger:
 
     def _default_run_name(self, args: Dict[str, Any]) -> str:
         prefix = _sanitize_text(args.get("prefix", "run"))
-        return "-".join(
-            [
-                prefix,
-                f"seed{args.get('seed', 'na')}",
-            ]
-        )
+        note = str(args.get("note", "")).strip()
+        if note:
+            return "-".join([prefix, _sanitize_text(note)])
+        return prefix
 
     def _default_project_name(self, args: Dict[str, Any]) -> str:
         prefix = _sanitize_text(args.get("prefix", "run"))

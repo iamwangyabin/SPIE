@@ -297,6 +297,7 @@ def get_backbone(args, pretrained=False):
                 expert_tokens=args.get("expert_tokens", 4),
                 lora_rank=args.get("lora_rank", 8),
                 lora_alpha=args.get("lora_alpha", 1.0),
+                feature_fusion_alpha=args.get("feature_fusion_alpha", 1.0),
             )
         elif name == "vit_base_patch16_224_in21k_spie_v3":
             model = vit_spie_v3.vit_base_patch16_224_in21k_spie_v3(
@@ -308,6 +309,7 @@ def get_backbone(args, pretrained=False):
                 expert_tokens=args.get("expert_tokens", 4),
                 lora_rank=args.get("lora_rank", 8),
                 lora_alpha=args.get("lora_alpha", 1.0),
+                feature_fusion_alpha=args.get("feature_fusion_alpha", 1.0),
             )
         else:
             raise NotImplementedError("Unknown type {}".format(name))
