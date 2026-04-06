@@ -119,8 +119,7 @@ def _train(args):
     _set_random(args["seed"])
     _set_device(args)
     print_args(args)
-    logging.info("Run directory: %s", run_dir)
-    logging.info("Checkpoint directory: %s", checkpoint_dir)
+    logging.info("log dir: %s", run_dir)
 
     data_manager = DataManager(
         args["dataset"],
@@ -286,5 +285,8 @@ def _set_random(seed=1):
 
 
 def print_args(args):
+    hidden_keys = {"run_dir", "checkpoint_dir", "log_path"}
     for key, value in args.items():
+        if key in hidden_keys:
+            continue
         logging.info("{}: {}".format(key, value))
