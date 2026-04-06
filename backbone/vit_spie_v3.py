@@ -131,7 +131,7 @@ class VisionTransformer(TunaMaxVisionTransformer):
             raise ValueError(f"expert_tokens must be > 0, got {expert_tokens}")
 
         self.expert_tokens = int(expert_tokens)
-        self.cur_expert_tokens = self._init_expert_tokens_from_cls()
+        self.cur_expert_tokens = self._init_expert_tokens_random()
         self.expert_token_list = nn.ParameterList()
         self.blocks = nn.ModuleList([ExpertMLPLoRABlock(block, self.expert_tokens) for block in self.blocks])
         self._mask_cache = {}
@@ -148,12 +148,14 @@ class VisionTransformer(TunaMaxVisionTransformer):
             self.cur_adapter.append(adapter)
         self.cur_adapter.requires_grad_(True)
 
-    def _init_expert_tokens_from_cls(self):
-        return nn.Parameter(self.cls_token.detach().clone().expand(1, self.expert_tokens, -1).clone())
+    def _init_expert_tokens_random(self):
+        expert_tokens = nn.Parameter(torch.empty(1, self.expert_tokens, self.embed_dim))
+        nn.init.trunc_normal_(expert_tokens, std=0.02)
+        return expert_tokens
 
     def reset_task_modules(self):
         self.init_adapters()
-        self.cur_expert_tokens = self._init_expert_tokens_from_cls()
+        self.cur_expert_tokens = self._init_expert_tokens_random()
 
     def freeze(self):
         for param in self.parameters():
