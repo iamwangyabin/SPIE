@@ -9,7 +9,9 @@ import torch
 from torch.nn import functional as F
 
 from expert_response_analysis import (
+    build_task_metadata,
     build_test_loader,
+    get_logits_for_expert,
     is_incremental_expert_model,
     iter_config_seeds,
     load_json,
@@ -25,7 +27,10 @@ from utils.data_manager import DataManager
 
 def setup_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Compute the fraction of wrong test samples routed to expert 0."
+        description=(
+            "Compute the fraction of wrong test samples routed to a target expert, "
+            "plus the target-vs-true-expert max-score margin on stolen wrong samples."
+        )
     )
     parser.add_argument("--config", type=str, required=True, help="Json config file used for training.")
     parser.add_argument(
@@ -66,6 +71,56 @@ def active_expert_ids(model) -> Sequence[int]:
 def map_local_routes(local_routes: torch.Tensor, active_ids: Sequence[int]) -> torch.Tensor:
     route_lookup = torch.tensor(active_ids, device=local_routes.device, dtype=torch.long)
     return route_lookup[local_routes]
+
+
+def summarize_values(values: Sequence[float]) -> Dict[str, float]:
+    if not values:
+        return {
+            "count": 0,
+            "mean": float("nan"),
+            "std": float("nan"),
+            "median": float("nan"),
+            "p90": float("nan"),
+            "p95": float("nan"),
+            "p99": float("nan"),
+            "min": float("nan"),
+            "max": float("nan"),
+        }
+
+    tensor = torch.tensor(values, dtype=torch.float64)
+    return {
+        "count": int(tensor.numel()),
+        "mean": float(tensor.mean().item()),
+        "std": float(tensor.std(unbiased=False).item()),
+        "median": float(torch.quantile(tensor, 0.50).item()),
+        "p90": float(torch.quantile(tensor, 0.90).item()),
+        "p95": float(torch.quantile(tensor, 0.95).item()),
+        "p99": float(torch.quantile(tensor, 0.99).item()),
+        "min": float(tensor.min().item()),
+        "max": float(tensor.max().item()),
+    }
+
+
+@torch.no_grad()
+def max_scores_by_expert(
+    model,
+    inputs: torch.Tensor,
+    expert_ids: Sequence[int],
+    task_offsets: Sequence[int],
+    apply_scale: bool,
+) -> torch.Tensor:
+    scores = []
+    for expert_id in expert_ids:
+        logits, _ = get_logits_for_expert(
+            model=model,
+            inputs=inputs,
+            expert_id=expert_id,
+            total_classes=model._total_classes,
+            task_offsets=task_offsets,
+            apply_scale=apply_scale,
+        )
+        scores.append(logits.max(dim=1).values)
+    return torch.stack(scores, dim=1)
 
 
 @torch.no_grad()
@@ -211,6 +266,8 @@ def collect_wrong_route_fraction(
     model,
     loader,
     expert_id: int,
+    class_to_task: Dict[int, int],
+    task_offsets: Sequence[int],
     model_name: str,
     apply_scale: bool,
 ) -> Dict:
@@ -224,6 +281,9 @@ def collect_wrong_route_fraction(
     total = 0
     wrong_total = 0
     wrong_to_expert = 0
+    stolen_wrong_to_expert = 0
+    target_beats_true_count = 0
+    target_true_margins = []
     route_definition: Optional[str] = None
 
     for _, inputs, targets in loader:
@@ -239,10 +299,40 @@ def collect_wrong_route_fraction(
 
         wrong_mask = pred_classes.ne(targets)
         expert_mask = routed_experts.eq(expert_id)
+        true_experts = torch.tensor(
+            [class_to_task[int(target)] for target in targets.detach().cpu().tolist()],
+            device=targets.device,
+            dtype=torch.long,
+        )
+        stolen_wrong_mask = wrong_mask & expert_mask & true_experts.ne(expert_id)
 
         total += int(targets.numel())
         wrong_total += int(wrong_mask.sum().item())
         wrong_to_expert += int((wrong_mask & expert_mask).sum().item())
+        stolen_wrong_count = int(stolen_wrong_mask.sum().item())
+        stolen_wrong_to_expert += stolen_wrong_count
+
+        if stolen_wrong_count > 0:
+            score_matrix = max_scores_by_expert(
+                model=model,
+                inputs=inputs,
+                expert_ids=expert_ids,
+                task_offsets=task_offsets,
+                apply_scale=apply_scale,
+            )
+            active_lookup = {int(active_id): idx for idx, active_id in enumerate(expert_ids)}
+            target_local_expert = active_lookup[int(expert_id)]
+            true_local_experts = torch.tensor(
+                [active_lookup[int(true_expert)] for true_expert in true_experts.detach().cpu().tolist()],
+                device=targets.device,
+                dtype=torch.long,
+            )
+            batch_indices = torch.arange(targets.shape[0], device=targets.device)
+            target_scores = score_matrix[:, target_local_expert]
+            true_scores = score_matrix[batch_indices, true_local_experts]
+            margins = (target_scores - true_scores)[stolen_wrong_mask]
+            target_beats_true_count += int((margins > 0).sum().item())
+            target_true_margins.extend(float(value) for value in margins.detach().cpu().tolist())
 
         for route_id in torch.unique(routed_experts).detach().cpu().tolist():
             route_mask = routed_experts.eq(int(route_id))
@@ -252,6 +342,7 @@ def collect_wrong_route_fraction(
             )
 
     target_suffix = f"expert_{expert_id}"
+    margin_summary = summarize_values(target_true_margins)
     return {
         "total_samples": total,
         "wrong_samples": wrong_total,
@@ -271,6 +362,22 @@ def collect_wrong_route_fraction(
         "top1_accuracy_percent": (1.0 - wrong_total / total) * 100.0 if total > 0 else float("nan"),
         "route_counts": route_counts,
         "wrong_route_counts": wrong_route_counts,
+        "stolen_wrong_samples_routed_to_target_expert": stolen_wrong_to_expert,
+        f"stolen_wrong_samples_routed_to_{target_suffix}": stolen_wrong_to_expert,
+        "target_minus_true_expert_max_score": margin_summary,
+        f"{target_suffix}_minus_true_expert_max_score": margin_summary,
+        "target_expert_beats_true_expert_count": target_beats_true_count,
+        f"{target_suffix}_beats_true_expert_count": target_beats_true_count,
+        "fraction_of_stolen_wrong_target_expert_samples_where_target_beats_true_expert": (
+            target_beats_true_count / stolen_wrong_to_expert if stolen_wrong_to_expert > 0 else float("nan")
+        ),
+        f"fraction_of_stolen_wrong_{target_suffix}_samples_where_{target_suffix}_beats_true_expert": (
+            target_beats_true_count / stolen_wrong_to_expert if stolen_wrong_to_expert > 0 else float("nan")
+        ),
+        "margin_definition": (
+            "For wrong samples routed to target_expert whose true expert differs from target_expert, "
+            "max_c z_target_expert,c(x) - max_c z_true_expert,c(x)."
+        ),
         "route_definition": route_definition,
     }
 
@@ -309,6 +416,7 @@ def run_one_seed(config: Dict, cli_args: argparse.Namespace, seed: int) -> Dict:
 
     model = factory.get_model(args["model_name"], args)
     checkpoint = load_task_checkpoint(model, data_manager, checkpoint_path, expected_task_id)
+    class_to_task, task_offsets = build_task_metadata(data_manager, model._cur_task, model._total_classes)
     loader = build_test_loader(
         data_manager=data_manager,
         total_classes=model._total_classes,
@@ -327,6 +435,8 @@ def run_one_seed(config: Dict, cli_args: argparse.Namespace, seed: int) -> Dict:
         model=model,
         loader=loader,
         expert_id=cli_args.expert_id,
+        class_to_task=class_to_task,
+        task_offsets=task_offsets,
         model_name=args["model_name"],
         apply_scale=not cli_args.no_scale,
     )
