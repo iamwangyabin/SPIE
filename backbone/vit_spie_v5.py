@@ -25,8 +25,8 @@ class LoRALinear(nn.Module):
         return self.up_proj(self.down_proj(x)) * self.scale
 
 
-class ExpertTokenMLPLoRA(nn.Module):
-    """MLP LoRA branch used only by the expert-token sub-sequence."""
+class MLPLoRAAdapter(nn.Module):
+    """MLP LoRA adapter branch applied to the full token sequence."""
 
     def __init__(self, dim, mlp_hidden_dim, rank=8, alpha=1.0):
         super().__init__()
@@ -37,8 +37,8 @@ class ExpertTokenMLPLoRA(nn.Module):
         self.up_proj = self.fc2_lora.up_proj
 
 
-class ExpertTokenMLPLoRABlock(nn.Module):
-    """TunaMax block wrapper with MLP LoRA applied only to expert tokens."""
+class MLPLoRAAdapterBlock(nn.Module):
+    """TunaMax block wrapper with MLP LoRA applied to all tokens."""
 
     def __init__(self, base_block):
         super().__init__()
@@ -84,28 +84,28 @@ class ExpertTokenMLPLoRABlock(nn.Module):
         attn_output = self.attn.proj_drop(attn_output)
         return attn_output
 
-    def forward(self, x, lora=None, attn_mask=None, num_backbone_tokens=None):
+    def forward(self, x, lora=None, attn_mask=None):
         x = x + self.drop_path(self._forward_attention(self.norm1(x), attn_mask=attn_mask))
 
         residual = x
         norm2_x = self.norm2(x)
         hidden = self.fc1(norm2_x)
 
-        if lora is not None and num_backbone_tokens is not None and x.shape[1] > num_backbone_tokens:
-            hidden[:, num_backbone_tokens:, :] += lora.fc1_lora(norm2_x[:, num_backbone_tokens:, :])
+        if lora is not None:
+            hidden = hidden + lora.fc1_lora(norm2_x)
 
         hidden = self.mlp_drop(self.act(hidden))
         out = self.fc2(hidden)
 
-        if lora is not None and num_backbone_tokens is not None and x.shape[1] > num_backbone_tokens:
-            out[:, num_backbone_tokens:, :] += lora.fc2_lora(hidden[:, num_backbone_tokens:, :])
+        if lora is not None:
+            out = out + lora.fc2_lora(hidden)
 
         out = self.drop_path(self.mlp_drop(out))
         return residual + out
 
 
 class VisionTransformer(TunaMaxVisionTransformer):
-    """TunaMax-style ViT with SPiE v2-style expert tokens and MLP LoRA experts."""
+    """TunaMax-style ViT with SPiE v2-style expert tokens and full-sequence MLP LoRA adapters."""
 
     def __init__(self, *args, expert_tokens=4, lora_rank=8, lora_alpha=1.0, **kwargs):
         self.lora_rank = int(lora_rank)
@@ -117,13 +117,13 @@ class VisionTransformer(TunaMaxVisionTransformer):
         self.expert_tokens = int(expert_tokens)
         self.cur_expert_tokens = self._init_expert_tokens_from_cls()
         self.expert_token_list = nn.ParameterList()
-        self.blocks = nn.ModuleList([ExpertTokenMLPLoRABlock(block) for block in self.blocks])
+        self.blocks = nn.ModuleList([MLPLoRAAdapterBlock(block) for block in self.blocks])
         self._mask_cache = {}
 
     def init_adapters(self):
         self.cur_adapter = nn.ModuleList()
         for block in self.blocks:
-            adapter = ExpertTokenMLPLoRA(
+            adapter = MLPLoRAAdapter(
                 dim=block.norm1.normalized_shape[0],
                 mlp_hidden_dim=block.fc1.out_features,
                 rank=self.lora_rank,
@@ -226,7 +226,6 @@ class VisionTransformer(TunaMaxVisionTransformer):
                 x,
                 lora=lora,
                 attn_mask=attn_mask,
-                num_backbone_tokens=num_backbone_tokens,
             )
 
         if self.global_pool:

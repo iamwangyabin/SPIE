@@ -2,7 +2,7 @@ from models.spie_v2 import Learner as SPiEV2Learner
 
 
 class Learner(SPiEV2Learner):
-    """TunaMax learner with SPiE v5 expert-token MLP-LoRA experts."""
+    """TunaMax learner with SPiE v5 full-sequence MLP-LoRA adapters."""
 
     def __init__(self, args):
         super().__init__(args)
