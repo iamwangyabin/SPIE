@@ -13,6 +13,10 @@ import torch.nn as nn
 
 warnings.filterwarnings("ignore", category=FutureWarning, module=r"timm\..*")
 
+from utils.timm_compat import patch_timm_dataclass_defaults
+
+patch_timm_dataclass_defaults()
+
 from backbone.vit_spie_v2 import VisionTransformer
 
 
