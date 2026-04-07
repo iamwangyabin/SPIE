@@ -8,6 +8,9 @@ class Learner(SPiEV2Learner):
         super().__init__(args)
         self.use_orth = False
 
+    def _should_reset_task_modules(self):
+        return self._cur_task >= 0
+
     def orth_loss(self, features):
         del features
         return 0.0

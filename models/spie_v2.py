@@ -57,7 +57,7 @@ class Learner(TunaMaxLearner):
         self._network.update_fc(self._total_classes - self._known_classes)
         logging.info("Learning on {}-{}".format(self._known_classes, self._total_classes))
 
-        if self._cur_task > 0:
+        if self._should_reset_task_modules():
             backbone = self._backbone_module()
             backbone.reset_task_modules()
 
@@ -129,3 +129,6 @@ class Learner(TunaMaxLearner):
             raise ValueError(f"Unsupported optimizer: {self.args['optimizer']}")
 
         return optimizer
+
+    def _should_reset_task_modules(self):
+        return self._cur_task > 0
