@@ -2,6 +2,7 @@ import argparse
 import copy
 import json
 import logging
+import os
 from pathlib import Path
 
 import numpy as np
@@ -42,18 +43,40 @@ def set_device(args):
         args["device"] = [torch.device("cpu")]
         return
 
+    cuda_count = torch.cuda.device_count()
     raw_devices = args.get("device", [])
     parsed_devices = []
     for device in raw_devices:
         if isinstance(device, torch.device):
-            parsed_devices.append(device)
+            parsed_device = device
+        else:
+            device_text = str(device).strip().lower()
+            if device_text.startswith("cuda:"):
+                parsed_device = torch.device(device_text)
+            elif device_text.isdigit():
+                parsed_device = torch.device("cuda:{}".format(device_text))
+            else:
+                continue
+
+        if parsed_device.type != "cuda":
+            parsed_devices.append(parsed_device)
             continue
 
-        device_text = str(device).strip().lower()
-        if device_text.startswith("cuda:"):
-            parsed_devices.append(torch.device(device_text))
-        elif device_text.isdigit():
-            parsed_devices.append(torch.device("cuda:{}".format(device_text)))
+        if parsed_device.index is None:
+            parsed_devices.append(torch.device("cuda:0"))
+            continue
+
+        if 0 <= parsed_device.index < cuda_count:
+            parsed_devices.append(parsed_device)
+            continue
+
+        logging.warning(
+            "Ignoring unavailable CUDA device %s. PyTorch sees %s CUDA device(s); "
+            "CUDA_VISIBLE_DEVICES=%s. Use visible ordinals such as cuda:0 after CUDA_VISIBLE_DEVICES remapping.",
+            parsed_device,
+            cuda_count,
+            os.environ.get("CUDA_VISIBLE_DEVICES", "<unset>"),
+        )
 
     args["device"] = parsed_devices or [torch.device("cuda:0")]
 
