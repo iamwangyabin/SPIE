@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from torch.utils.data import DataLoader
 
 from utils import factory
 from utils.data_manager import DataManager
@@ -26,6 +27,12 @@ def setup_parser():
         type=str,
         default="",
         help="Optional path to save oracle/full evaluation results as JSON.",
+    )
+    parser.add_argument(
+        "--checkpoint-dir",
+        type=str,
+        default="",
+        help="Directory containing task_0.pkl, task_1.pkl, ... checkpoints saved by trainer.py.",
     )
     return parser
 
@@ -165,9 +172,103 @@ def eval_oracle_task_id(model, loader):
     return evaluate_predictions(model, y_pred, y_true)
 
 
+def resolve_checkpoint_dir(args):
+    checkpoint_dir = args.get("checkpoint_dir", "")
+    if not checkpoint_dir:
+        raise ValueError("oracle_task_id_eval.py requires --checkpoint-dir or checkpoint_dir in the config.")
+    return Path(str(checkpoint_dir).format(seed=args["seed"]))
+
+
+def total_classes_after_task(data_manager, task_id):
+    return sum(data_manager.get_task_size(task_idx) for task_idx in range(task_id + 1))
+
+
+def rebuild_task_metadata(model, data_manager, task_id, total_classes):
+    model._cur_task = task_id
+    model._total_classes = total_classes
+    model._known_classes = total_classes - data_manager.get_task_size(task_id)
+    model.cls2task = {}
+
+    class_offset = 0
+    for mapped_task_id in range(task_id + 1):
+        task_size = data_manager.get_task_size(mapped_task_id)
+        for class_idx in range(class_offset, class_offset + task_size):
+            model.cls2task[class_idx] = mapped_task_id
+        class_offset += task_size
+
+
+def prepare_checkpoint_structure(model, data_manager, task_id, state_dict):
+    backbone = model._backbone_module() if hasattr(model, "_backbone_module") else model._network.backbone
+
+    current_heads = 0 if model._network.fc is None else len(model._network.fc.heads)
+    for mapped_task_id in range(current_heads, task_id + 1):
+        model._network.update_fc(data_manager.get_task_size(mapped_task_id))
+
+    current_adapters = len(backbone.adapter_list) if hasattr(backbone, "adapter_list") else task_id + 1
+    for _ in range(current_adapters, task_id + 1):
+        if hasattr(backbone, "adapter_update"):
+            backbone.adapter_update()
+
+    has_merged_adapter = any(key.startswith("backbone.merged_adapter.") for key in state_dict)
+    if has_merged_adapter and hasattr(backbone, "merged_adapter") and len(backbone.merged_adapter) == 0:
+        backbone.merged_adapter = copy.deepcopy(backbone.cur_adapter)
+
+
+def load_task_checkpoint(model, data_manager, checkpoint_path, expected_task_id):
+    if not checkpoint_path.is_file():
+        raise FileNotFoundError("Checkpoint not found: {}".format(checkpoint_path))
+
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    task_id = int(checkpoint["task_id"] if "task_id" in checkpoint else checkpoint["tasks"])
+    if task_id != expected_task_id:
+        raise ValueError(
+            "Checkpoint {} contains task_id={}, but task_{}.pkl was expected.".format(
+                checkpoint_path,
+                task_id,
+                expected_task_id,
+            )
+        )
+
+    total_classes = int(checkpoint["total_classes"])
+    expected_total_classes = total_classes_after_task(data_manager, task_id)
+    if total_classes != expected_total_classes:
+        raise ValueError(
+            "Checkpoint {} has total_classes={}, but dataset/config expects {} for task {}.".format(
+                checkpoint_path,
+                total_classes,
+                expected_total_classes,
+                task_id,
+            )
+        )
+
+    model._network.to("cpu")
+    state_dict = checkpoint["model_state_dict"]
+    prepare_checkpoint_structure(model, data_manager, task_id, state_dict)
+    incompatible = model._network.load_state_dict(state_dict, strict=False)
+    if incompatible.missing_keys or incompatible.unexpected_keys:
+        raise RuntimeError(
+            "Checkpoint {} did not match the model. Missing keys: {}. Unexpected keys: {}.".format(
+                checkpoint_path,
+                incompatible.missing_keys,
+                incompatible.unexpected_keys,
+            )
+        )
+
+    rebuild_task_metadata(model, data_manager, task_id, total_classes)
+    model._network.to(model._device)
+    model._network.eval()
+    return checkpoint
+
+
+def build_test_loader(data_manager, model, total_classes):
+    test_dataset = data_manager.get_dataset(np.arange(0, total_classes), source="test", mode="test")
+    return DataLoader(test_dataset, batch_size=model.batch_size, shuffle=False, num_workers=8)
+
+
 def run_single_seed(args):
     set_random(args["seed"])
     set_device(args)
+    checkpoint_dir = resolve_checkpoint_dir(args)
 
     data_manager = DataManager(
         args["dataset"],
@@ -184,8 +285,11 @@ def run_single_seed(args):
     results = []
 
     for task_id in range(data_manager.nb_tasks):
-        logging.info("Running task %s/%s", task_id + 1, data_manager.nb_tasks)
-        model.incremental_train(data_manager)
+        checkpoint_path = checkpoint_dir / "task_{}.pkl".format(task_id)
+        logging.info("Evaluating checkpoint %s", checkpoint_path)
+        checkpoint = load_task_checkpoint(model, data_manager, checkpoint_path, task_id)
+        model.test_loader = build_test_loader(data_manager, model, model._total_classes)
+
         full_cnn_accy, _ = model.eval_task()
         oracle_cnn_accy = eval_oracle_task_id(model, model.test_loader)
 
@@ -199,11 +303,12 @@ def run_single_seed(args):
                 "task_id": task_id,
                 "known_classes": model._known_classes,
                 "total_classes": model._total_classes,
+                "checkpoint": str(checkpoint_path),
                 "full_cnn": full_cnn_accy,
                 "oracle_cnn": oracle_cnn_accy,
+                "checkpoint_full_cnn": checkpoint.get("cnn_accy"),
             }
         )
-        model.after_task()
 
     return results
 
@@ -211,6 +316,8 @@ def run_single_seed(args):
 def main():
     cli_args = setup_parser().parse_args()
     config = load_json(cli_args.config)
+    if cli_args.checkpoint_dir:
+        config["checkpoint_dir"] = cli_args.checkpoint_dir
 
     logging.basicConfig(
         level=logging.INFO,
