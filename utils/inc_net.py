@@ -434,6 +434,42 @@ def get_backbone(args, pretrained=False):
         else:
             raise NotImplementedError("Unknown type {}".format(name))
         return model
+    elif "_spie_v7" in name or "_spiev7" in name:
+        ffn_num = 16
+        from backbone import vit_spie_v7
+        from easydict import EasyDict
+        tuning_config = EasyDict(
+            ffn_adapt=True,
+            ffn_option="parallel",
+            ffn_adapter_layernorm_option="none",
+            ffn_adapter_init_option="lora",
+            ffn_adapter_scalar="0.1",
+            ffn_num=ffn_num,
+            d_model=768,
+            _device=args["device"][0],
+            vpt_on=False,
+            vpt_num=0,
+        )
+        common_kwargs = dict(
+            num_classes=args["nb_classes"],
+            global_pool=False,
+            drop_path_rate=0.0,
+            tuning_config=tuning_config,
+            r=args["r"],
+            expert_tokens=args.get("expert_tokens", 4),
+            lora_rank=args.get("lora_rank", 8),
+            lora_alpha=args.get("lora_alpha", 1.0),
+            shared_lora_rank=args.get("shared_lora_rank", args.get("lora_rank", 8)),
+            shared_lora_alpha=args.get("shared_lora_alpha", args.get("lora_alpha", 1.0)),
+            cassle_predictor_hidden_dim=args.get("cassle_predictor_hidden_dim", None),
+        )
+        if name == "vit_base_patch16_224_spie_v7" or name == "vit_base_patch16_224_spiev7":
+            model = vit_spie_v7.vit_base_patch16_224_spie_v7(**common_kwargs)
+        elif name == "vit_base_patch16_224_in21k_spie_v7" or name == "vit_base_patch16_224_in21k_spiev7":
+            model = vit_spie_v7.vit_base_patch16_224_in21k_spie_v7(**common_kwargs)
+        else:
+            raise NotImplementedError("Unknown type {}".format(name))
+        return model
     elif '_tunamax' in name:
         ffn_num = 16
         from backbone import vit_tunamax
