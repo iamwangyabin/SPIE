@@ -113,7 +113,7 @@ class ExperimentLogger:
             global_epoch = task_id * item["total_epochs"] + item["epoch"]
             payload = {}
             for key, value in item.items():
-                if key in {"epoch", "total_epochs", "known_classes", "total_classes"}:
+                if key in {"stage", "epoch", "total_epochs", "known_classes", "total_classes"}:
                     continue
                 payload[f"train/{key}"] = value
             self._swanlab.log(_to_builtin(payload), step=global_epoch)
