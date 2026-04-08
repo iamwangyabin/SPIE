@@ -12,10 +12,12 @@ def get_model(model_name, args):
         from models.spie_v4 import Learner
     elif name == "spie_v5" or name == "spiev5":
         from models.spie_v5 import Learner
+    elif name == "spie_v6" or name == "spiev6":
+        from models.spie_v6 import Learner
     elif name == "spie":
         from models.spie import Learner
     elif name == "onlymax":
         from models.onlymax import Learner
     else:
-        raise ValueError("Supported model names are 'tuna', 'tunamax', 'spie_v2', 'spie_v3', 'spie_v4', 'spie_v5', 'spie', and 'onlymax'.")
+        raise ValueError("Supported model names are 'tuna', 'tunamax', 'spie_v2', 'spie_v3', 'spie_v4', 'spie_v5', 'spie_v6', 'spie', and 'onlymax'.")
     return Learner(args)
