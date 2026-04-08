@@ -13,6 +13,7 @@ from utils.toolkit import tensor2numpy
 
 class Learner(SPiEV6Learner):
     """SPiE v7 learner with task0-only shared-LoRA adaptation and isolated expert training."""
+    _spie_version_name = "SPiE v7"
 
     def __init__(self, args):
         super().__init__(args)
@@ -28,8 +29,8 @@ class Learner(SPiEV6Learner):
 
         total_params = sum(p.numel() for p in self._network.backbone.parameters())
         total_trainable_params = sum(p.numel() for p in self._network.backbone.parameters() if p.requires_grad)
-        logging.info("%s SPiE v7 total backbone parameters.", f"{total_params:,}")
-        logging.info("%s SPiE v7 trainable backbone parameters.", f"{total_trainable_params:,}")
+        logging.info("%s %s total backbone parameters.", f"{total_params:,}", self._spie_version_name)
+        logging.info("%s %s trainable backbone parameters.", f"{total_trainable_params:,}", self._spie_version_name)
 
     def _make_optimizer(self, network_params):
         if self.args["optimizer"] == "sgd":
