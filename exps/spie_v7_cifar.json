@@ -48,12 +48,6 @@
     "task0_copy_shared_to_expert": true,
     "incremental_expert_epochs": 30,
     "incremental_expert_lr_scale": 1.0,
-    "shared_ssl_lambda": 1.0,
-    "cassle_lambda": 1.0,
-    "cassle_predictor_hidden_dim": 768,
-    "shared_grad_clip": 1.0,
-    "ssl_flip_p": 0.5,
-    "ssl_noise_std": 0.0,
     "scale": 20.0,
     "m": 0.0
 }

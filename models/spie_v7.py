@@ -1,3 +1,4 @@
+import copy
 import logging
 
 import numpy as np
@@ -59,7 +60,6 @@ class Learner(SPiEV6Learner):
 
     def _freeze_shared_domain_adapter(self):
         self._set_shared_lora_requires_grad(False)
-        self._backbone_module().cassle_predictor.requires_grad_(False)
 
     def _copy_shared_lora_to_current_expert(self):
         backbone = self._backbone_module()
@@ -67,17 +67,17 @@ class Learner(SPiEV6Learner):
 
     def _task0_shared_optimizer(self):
         backbone = self._backbone_module()
-        shared_params = [
-            p
-            for p in list(backbone.cur_shared_adapter.parameters()) + list(backbone.cassle_predictor.parameters())
-            if p.requires_grad
-        ]
         network_params = [
             {
-                "params": shared_params,
+                "params": [p for p in backbone.cur_shared_adapter.parameters() if p.requires_grad],
                 "lr": self.task0_shared_lr,
                 "weight_decay": self.share_lora_weight_decay,
-            }
+            },
+            {
+                "params": self._network.fc.parameters(),
+                "lr": self.init_lr,
+                "weight_decay": self.weight_decay,
+            },
         ]
         return self._make_optimizer(network_params)
 
@@ -116,7 +116,6 @@ class Learner(SPiEV6Learner):
             self._train_task0_expert(train_loader)
         else:
             self._train_incremental_expert(train_loader)
-            self._shared_teacher = None
 
         self._freeze_shared_domain_adapter()
         self._set_current_expert_requires_grad(True)
@@ -128,17 +127,22 @@ class Learner(SPiEV6Learner):
     def _train_task0_shared_lora(self, train_loader):
         if self.task0_shared_epochs <= 0:
             return
+        fc_state = copy.deepcopy(self._network.fc.state_dict())
         self._set_shared_lora_requires_grad(True)
-        self._backbone_module().cassle_predictor.requires_grad_(True)
         self._set_current_expert_requires_grad(False)
-        self._shared_teacher = None
         optimizer = self._task0_shared_optimizer()
         scheduler = self._get_scheduler_for_epochs(optimizer, self.task0_shared_epochs)
-        self._run_task0_shared_phase(
-            train_loader=train_loader,
-            optimizer=optimizer,
-            scheduler=scheduler,
-        )
+        try:
+            self._run_task0_phase(
+                train_loader=train_loader,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                epochs=self.task0_shared_epochs,
+                adapter_id=-1,
+                stage="task0_shared_lora",
+            )
+        finally:
+            self._network.fc.load_state_dict(fc_state)
 
     def _train_task0_expert(self, train_loader):
         if self.task0_expert_epochs <= 0:
@@ -236,58 +240,6 @@ class Learner(SPiEV6Learner):
                 total_epochs=epochs,
                 loss=float(avg_loss),
                 acc=float(train_acc),
-                lr=float(lr),
-            )
-            prog_bar.set_description(info)
-
-        logging.info(info)
-
-    def _run_task0_shared_phase(self, train_loader, optimizer, scheduler):
-        prog_bar = tqdm(range(self.task0_shared_epochs))
-
-        for _, epoch in enumerate(prog_bar):
-            self._network.backbone.train()
-            losses = 0.0
-            ssl_losses = 0.0
-            cassle_losses = 0.0
-
-            for _, (_, inputs, _) in enumerate(train_loader):
-                inputs = inputs.to(self._device)
-                ssl_loss, cassle_loss = self._shared_ssl_and_cassle_losses(inputs)
-                loss = self.shared_ssl_lambda * ssl_loss + self.cassle_lambda * cassle_loss
-
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-
-                losses += loss.item()
-                ssl_losses += ssl_loss.item()
-                cassle_losses += cassle_loss.item()
-
-            if scheduler:
-                scheduler.step()
-
-            lr = optimizer.param_groups[0]["lr"]
-            avg_loss = losses / len(train_loader)
-            avg_ssl_loss = ssl_losses / len(train_loader)
-            avg_cassle_loss = cassle_losses / len(train_loader)
-            info = (
-                "Task {}, task0_shared_lora, Epoch {}/{} => Loss {:.3f}, SSL {:.3f}, CaSSLe {:.3f}"
-            ).format(
-                self._cur_task,
-                epoch + 1,
-                self.task0_shared_epochs,
-                avg_loss,
-                avg_ssl_loss,
-                avg_cassle_loss,
-            )
-            self._record_extra_stage_epoch(
-                stage="task0_shared_lora",
-                epoch=epoch + 1,
-                total_epochs=self.task0_shared_epochs,
-                loss=float(avg_loss),
-                shared_ssl_loss=float(avg_ssl_loss),
-                cassle_loss=float(avg_cassle_loss),
                 lr=float(lr),
             )
             prog_bar.set_description(info)

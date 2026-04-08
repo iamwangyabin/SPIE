@@ -461,7 +461,6 @@ def get_backbone(args, pretrained=False):
             lora_alpha=args.get("lora_alpha", 1.0),
             shared_lora_rank=args.get("shared_lora_rank", args.get("lora_rank", 8)),
             shared_lora_alpha=args.get("shared_lora_alpha", args.get("lora_alpha", 1.0)),
-            cassle_predictor_hidden_dim=args.get("cassle_predictor_hidden_dim", None),
         )
         if name == "vit_base_patch16_224_spie_v7" or name == "vit_base_patch16_224_spiev7":
             model = vit_spie_v7.vit_base_patch16_224_spie_v7(**common_kwargs)
