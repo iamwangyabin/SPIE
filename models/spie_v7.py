@@ -11,7 +11,7 @@ from utils.toolkit import tensor2numpy
 
 
 class Learner(SPiEV6Learner):
-    """SPiE v7 learner with task0 shared-LoRA warmup and isolated expert training."""
+    """SPiE v7 learner with task0-only shared-LoRA adaptation and isolated expert training."""
 
     def __init__(self, args):
         super().__init__(args)
@@ -20,6 +20,10 @@ class Learner(SPiEV6Learner):
         self.task0_shared_lr = float(args.get("task0_shared_lr", self.init_lr * args.get("task0_shared_lr_scale", 1.0)))
         self.task0_expert_lr = float(args.get("task0_expert_lr", self.init_lr))
         self.task0_copy_shared_to_expert = bool(args.get("task0_copy_shared_to_expert", True))
+        self.incremental_expert_epochs = int(args.get("incremental_expert_epochs", args["tuned_epoch"]))
+        self.incremental_expert_lr = float(
+            args.get("incremental_expert_lr", self.init_lr * args.get("incremental_expert_lr_scale", 1.0))
+        )
 
         total_params = sum(p.numel() for p in self._network.backbone.parameters())
         total_trainable_params = sum(p.numel() for p in self._network.backbone.parameters() if p.requires_grad)
@@ -52,6 +56,10 @@ class Learner(SPiEV6Learner):
         backbone = self._backbone_module()
         backbone.cur_adapter.requires_grad_(requires_grad)
         backbone.cur_expert_tokens.requires_grad = requires_grad
+
+    def _freeze_shared_domain_adapter(self):
+        self._set_shared_lora_requires_grad(False)
+        self._backbone_module().cassle_predictor.requires_grad_(False)
 
     def _copy_shared_lora_to_current_expert(self):
         backbone = self._backbone_module()
@@ -107,15 +115,11 @@ class Learner(SPiEV6Learner):
                 self._copy_shared_lora_to_current_expert()
             self._train_task0_expert(train_loader)
         else:
-            self._prepare_shared_teacher()
-            optimizer = self.get_optimizer(backbone)
-            scheduler = self.get_scheduler(optimizer)
-            self._init_train(train_loader, None, optimizer, scheduler)
+            self._train_incremental_expert(train_loader)
             self._shared_teacher = None
 
-        self._set_shared_lora_requires_grad(True)
+        self._freeze_shared_domain_adapter()
         self._set_current_expert_requires_grad(True)
-        backbone_module.cassle_predictor.requires_grad_(True)
         backbone_module.adapter_update()
         self._compute_mean(backbone)
         if self._cur_task > 0:
@@ -154,7 +158,37 @@ class Learner(SPiEV6Learner):
                 stage="task0_expert",
             )
         finally:
-            self._set_shared_lora_requires_grad(True)
+            self._set_shared_lora_requires_grad(False)
+
+    def _incremental_expert_optimizer(self):
+        backbone = self._backbone_module()
+        expert_params = [
+            p
+            for name, p in backbone.named_parameters()
+            if p.requires_grad and ("cur_adapter" in name or "cur_expert_tokens" in name)
+        ]
+        network_params = [
+            {
+                "params": expert_params,
+                "lr": self.incremental_expert_lr,
+                "weight_decay": self.weight_decay,
+            },
+            {
+                "params": self._network.fc.parameters(),
+                "lr": self.init_lr,
+                "weight_decay": self.weight_decay,
+            },
+        ]
+        return self._make_optimizer(network_params)
+
+    def _train_incremental_expert(self, train_loader):
+        if self.incremental_expert_epochs <= 0:
+            return
+        self._freeze_shared_domain_adapter()
+        self._set_current_expert_requires_grad(True)
+        optimizer = self._incremental_expert_optimizer()
+        scheduler = self._get_scheduler_for_epochs(optimizer, self.incremental_expert_epochs)
+        self._run_incremental_expert_phase(train_loader, optimizer, scheduler)
 
     def _run_task0_phase(self, train_loader, optimizer, scheduler, epochs, adapter_id, stage):
         if epochs <= 0:
@@ -204,6 +238,58 @@ class Learner(SPiEV6Learner):
                 loss=float(avg_loss),
                 acc=float(train_acc),
                 lr=float(lr),
+            )
+            prog_bar.set_description(info)
+
+        logging.info(info)
+
+    def _run_incremental_expert_phase(self, train_loader, optimizer, scheduler):
+        prog_bar = tqdm(range(self.incremental_expert_epochs))
+        loss_cos = AngularPenaltySMLoss(loss_type="cosface", eps=1e-7, s=self.args["scale"], m=self.args["m"])
+
+        for _, epoch in enumerate(prog_bar):
+            self._network.backbone.train()
+            self._freeze_shared_domain_adapter()
+            losses = 0.0
+            correct, total = 0, 0
+
+            for _, (_, inputs, targets) in enumerate(train_loader):
+                inputs, targets = inputs.to(self._device), targets.to(self._device)
+                features = self._network.backbone(inputs, adapter_id=self._cur_task, train=True)["features"]
+                logits = self._network.fc(features)["logits"]
+
+                loss = loss_cos(logits[:, self._known_classes :], targets - self._known_classes)
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+                losses += loss.item()
+                _, preds = torch.max(logits, dim=1)
+                correct += preds.eq(targets.expand_as(preds)).cpu().sum()
+                total += len(targets)
+
+            if scheduler:
+                scheduler.step()
+
+            train_acc = np.around(tensor2numpy(correct) * 100 / total, decimals=2)
+            lr = optimizer.param_groups[0]["lr"]
+            avg_loss = losses / len(train_loader)
+            info = "Task {}, incremental_expert, Epoch {}/{} => Loss {:.3f}, Train_accy {:.2f}".format(
+                self._cur_task,
+                epoch + 1,
+                self.incremental_expert_epochs,
+                avg_loss,
+                train_acc,
+            )
+            self._record_train_epoch(
+                epoch=epoch + 1,
+                total_epochs=self.incremental_expert_epochs,
+                loss=float(avg_loss),
+                acc=float(train_acc),
+                lr=float(lr),
+                stage="incremental_expert",
+                incremental_expert_lr=float(self.incremental_expert_lr),
+                shared_lora_frozen=True,
             )
             prog_bar.set_description(info)
 
