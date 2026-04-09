@@ -57,6 +57,11 @@ class Learner(SPiEV8Learner):
             self.shared_cls_ca_lr,
         )
 
+    @staticmethod
+    def _restore_requires_grad(params, flags):
+        for param, requires_grad in zip(params, flags):
+            param.requires_grad = requires_grad
+
     def _train(self, train_loader, test_loader):
         del test_loader
         backbone = self._network.backbone
@@ -117,70 +122,79 @@ class Learner(SPiEV8Learner):
         scheduler = self._get_scheduler_for_epochs(optimizer, self.expert_calibration_epochs)
         prog_bar = tqdm(range(self.expert_calibration_epochs))
 
-        self._network.backbone.eval()
-        self._network.fc.eval()
-        for param in self._network.backbone.parameters():
-            param.requires_grad = False
-        for param in self._network.fc.parameters():
-            param.requires_grad = False
+        backbone_params = list(self._network.backbone.parameters())
+        fc_params = list(self._network.fc.parameters())
+        backbone_grad_flags = [param.requires_grad for param in backbone_params]
+        fc_grad_flags = [param.requires_grad for param in fc_params]
 
-        routing_temperature = max(self.expert_calibration_routing_temperature, 1e-8)
-        for _, epoch in enumerate(prog_bar):
-            losses = 0.0
-            correct, total = 0, 0
+        try:
+            self._network.backbone.eval()
+            self._network.fc.eval()
+            for param in backbone_params:
+                param.requires_grad = False
+            for param in fc_params:
+                param.requires_grad = False
 
-            for _, (_, inputs, targets) in enumerate(train_loader):
-                inputs, targets = inputs.to(self._device), targets.to(self._device)
-                frozen_logits = []
-                with torch.no_grad():
-                    for expert_id in active_expert_ids:
-                        features = self._network.backbone(inputs, adapter_id=expert_id, train=False)["features"]
-                        logits = self._network.fc(features)["logits"][:, : self._total_classes]
-                        frozen_logits.append(logits.detach())
+            routing_temperature = max(self.expert_calibration_routing_temperature, 1e-8)
+            for _, epoch in enumerate(prog_bar):
+                losses = 0.0
+                correct, total = 0, 0
 
-                stacked_logits = torch.stack(
-                    [
-                        self._network.calibrate_expert_logits(logits, expert_id)
-                        for expert_id, logits in zip(active_expert_ids, frozen_logits)
-                    ],
-                    dim=0,
+                for _, (_, inputs, targets) in enumerate(train_loader):
+                    inputs, targets = inputs.to(self._device), targets.to(self._device)
+                    frozen_logits = []
+                    with torch.no_grad():
+                        for expert_id in active_expert_ids:
+                            features = self._network.backbone(inputs, adapter_id=expert_id, train=False)["features"]
+                            logits = self._network.fc(features)["logits"][:, : self._total_classes]
+                            frozen_logits.append(logits.detach())
+
+                    stacked_logits = torch.stack(
+                        [
+                            self._network.calibrate_expert_logits(logits, expert_id)
+                            for expert_id, logits in zip(active_expert_ids, frozen_logits)
+                        ],
+                        dim=0,
+                    )
+                    expert_scores = stacked_logits.max(dim=2).values
+                    expert_weights = F.softmax(expert_scores / routing_temperature, dim=0)
+                    fused_logits = (expert_weights.unsqueeze(-1) * stacked_logits).sum(dim=0)
+
+                    loss = F.cross_entropy(self.args["scale"] * fused_logits, targets)
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+
+                    losses += loss.item()
+                    _, preds = torch.max(fused_logits, dim=1)
+                    correct += preds.eq(targets.expand_as(preds)).cpu().sum()
+                    total += len(targets)
+
+                if scheduler:
+                    scheduler.step()
+
+                train_acc = np.around(tensor2numpy(correct) * 100 / total, decimals=2)
+                lr = optimizer.param_groups[0]["lr"]
+                avg_loss = losses / len(train_loader)
+                info = "Task {}, expert_calibration, Epoch {}/{} => Loss {:.3f}, Train_accy {:.2f}".format(
+                    self._cur_task,
+                    epoch + 1,
+                    self.expert_calibration_epochs,
+                    avg_loss,
+                    train_acc,
                 )
-                expert_scores = stacked_logits.max(dim=2).values
-                expert_weights = F.softmax(expert_scores / routing_temperature, dim=0)
-                fused_logits = (expert_weights.unsqueeze(-1) * stacked_logits).sum(dim=0)
-
-                loss = F.cross_entropy(self.args["scale"] * fused_logits, targets)
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-
-                losses += loss.item()
-                _, preds = torch.max(fused_logits, dim=1)
-                correct += preds.eq(targets.expand_as(preds)).cpu().sum()
-                total += len(targets)
-
-            if scheduler:
-                scheduler.step()
-
-            train_acc = np.around(tensor2numpy(correct) * 100 / total, decimals=2)
-            lr = optimizer.param_groups[0]["lr"]
-            avg_loss = losses / len(train_loader)
-            info = "Task {}, expert_calibration, Epoch {}/{} => Loss {:.3f}, Train_accy {:.2f}".format(
-                self._cur_task,
-                epoch + 1,
-                self.expert_calibration_epochs,
-                avg_loss,
-                train_acc,
-            )
-            self._record_extra_stage_epoch(
-                stage="expert_calibration",
-                epoch=epoch + 1,
-                total_epochs=self.expert_calibration_epochs,
-                loss=float(avg_loss),
-                acc=float(train_acc),
-                lr=float(lr),
-            )
-            prog_bar.set_description(info)
+                self._record_extra_stage_epoch(
+                    stage="expert_calibration",
+                    epoch=epoch + 1,
+                    total_epochs=self.expert_calibration_epochs,
+                    loss=float(avg_loss),
+                    acc=float(train_acc),
+                    lr=float(lr),
+                )
+                prog_bar.set_description(info)
+        finally:
+            self._restore_requires_grad(backbone_params, backbone_grad_flags)
+            self._restore_requires_grad(fc_params, fc_grad_flags)
 
         logging.info(info)
 
@@ -221,7 +235,8 @@ class Learner(SPiEV8Learner):
                 optimizer.step()
 
                 losses += loss.item()
-                _, preds = torch.max(logits, dim=1)
+                _, preds = torch.max(logits[:, self._known_classes :], dim=1)
+                preds = preds + self._known_classes
                 correct += preds.eq(targets.expand_as(preds)).cpu().sum()
                 total += len(targets)
 
@@ -249,6 +264,62 @@ class Learner(SPiEV8Learner):
             prog_bar.set_description(info)
 
         logging.info(info)
+
+    def _stack_calibrated_expert_logits(self, inputs, active_expert_ids):
+        logits_per_expert = []
+        for expert_id in active_expert_ids:
+            features = self._network.backbone(inputs, adapter_id=expert_id, train=False)["features"]
+            logits = self._network.fc(features)["logits"][:, : self._total_classes]
+            logits_per_expert.append(self._network.calibrate_expert_logits(logits, expert_id))
+        return torch.stack(logits_per_expert, dim=0)
+
+    def _fuse_calibrated_expert_logits(self, stacked_logits):
+        routing_temperature = max(self.expert_calibration_routing_temperature, 1e-8)
+        expert_scores = stacked_logits.max(dim=2).values
+        expert_weights = F.softmax(expert_scores / routing_temperature, dim=0)
+        return (expert_weights.unsqueeze(-1) * stacked_logits).sum(dim=0)
+
+    def _shared_cls_logits(self, inputs):
+        if self._network.fc_shared_cls is None:
+            return None
+        cls_features = self._network.backbone(inputs, adapter_id=-1, train=False)["cls_features"]
+        return self._network.fc_shared_cls(cls_features)["logits"][:, : self._total_classes]
+
+    def _eval_cnn(self, loader):
+        self._network.eval()
+        y_pred, y_true = [], []
+        active_expert_ids = self._active_expert_ids()
+        use_shared_cls = bool(self.args.get("v9_use_shared_cls_eval", True))
+        expert_weight = float(self.args.get("v9_expert_fusion_weight", 1.0))
+        shared_weight = float(self.args.get("v9_shared_cls_fusion_weight", 1.0))
+
+        for _, (_, inputs, targets) in enumerate(loader):
+            inputs = inputs.to(self._device)
+
+            with torch.no_grad():
+                stacked_logits = self._stack_calibrated_expert_logits(inputs, active_expert_ids)
+                logits = self._fuse_calibrated_expert_logits(stacked_logits)
+
+                if use_shared_cls:
+                    shared_cls_logits = self._shared_cls_logits(inputs)
+                    if shared_cls_logits is not None:
+                        logits = expert_weight * logits + shared_weight * shared_cls_logits
+
+            topk = min(self.topk, logits.shape[1])
+            predicts = torch.topk(logits, k=topk, dim=1, largest=True, sorted=True)[1]
+            if topk < self.topk:
+                pad = torch.full(
+                    (predicts.shape[0], self.topk - topk),
+                    -1,
+                    device=predicts.device,
+                    dtype=predicts.dtype,
+                )
+                predicts = torch.cat([predicts, pad], dim=1)
+
+            y_pred.append(predicts.cpu().numpy())
+            y_true.append(targets.cpu().numpy())
+
+        return np.concatenate(y_pred), np.concatenate(y_true)
 
     @torch.no_grad()
     def _compute_shared_cls_mean(self, model):
