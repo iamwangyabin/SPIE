@@ -504,6 +504,41 @@ def get_backbone(args, pretrained=False):
         else:
             raise NotImplementedError("Unknown type {}".format(name))
         return model
+    elif "_spie_v9" in name or "_spiev9" in name:
+        ffn_num = 16
+        from backbone import vit_spie_v9
+        from easydict import EasyDict
+        tuning_config = EasyDict(
+            ffn_adapt=True,
+            ffn_option="parallel",
+            ffn_adapter_layernorm_option="none",
+            ffn_adapter_init_option="lora",
+            ffn_adapter_scalar="0.1",
+            ffn_num=ffn_num,
+            d_model=768,
+            _device=args["device"][0],
+            vpt_on=False,
+            vpt_num=0,
+        )
+        common_kwargs = dict(
+            num_classes=args["nb_classes"],
+            global_pool=False,
+            drop_path_rate=0.0,
+            tuning_config=tuning_config,
+            r=args["r"],
+            expert_tokens=args.get("expert_tokens", 4),
+            lora_rank=args.get("lora_rank", 8),
+            lora_alpha=args.get("lora_alpha", 1.0),
+            shared_lora_rank=args.get("shared_lora_rank", args.get("lora_rank", 8)),
+            shared_lora_alpha=args.get("shared_lora_alpha", args.get("lora_alpha", 1.0)),
+        )
+        if name == "vit_base_patch16_224_spie_v9" or name == "vit_base_patch16_224_spiev9":
+            model = vit_spie_v9.vit_base_patch16_224_spie_v9(**common_kwargs)
+        elif name == "vit_base_patch16_224_in21k_spie_v9" or name == "vit_base_patch16_224_in21k_spiev9":
+            model = vit_spie_v9.vit_base_patch16_224_in21k_spie_v9(**common_kwargs)
+        else:
+            raise NotImplementedError("Unknown type {}".format(name))
+        return model
     elif '_tunamax' in name:
         ffn_num = 16
         from backbone import vit_tunamax
@@ -1560,6 +1595,11 @@ class TUNANet(nn.Module):
         self.backbone = get_backbone(args, pretrained)
         self.backbone.out_dim = getattr(self.backbone, "out_dim", 768)
         self.fc = None
+        self.fc_shared_cls = None
+        self.enable_shared_cls_classifier = bool(args.get("enable_shared_cls_classifier", False))
+        self.enable_expert_calibration = bool(args.get("enable_expert_calibration", False))
+        self.expert_calibration_log_scale = nn.ParameterList()
+        self.expert_calibration_bias = nn.ParameterList()
         self._device = args["device"][0]
        
 
@@ -1573,10 +1613,46 @@ class TUNANet(nn.Module):
             self.fc = self.generate_fc(self.feature_dim, nb_classes)
         else:
             self.fc.update(nb_classes, freeze_old=False)
+        if self.enable_shared_cls_classifier:
+            if self.fc_shared_cls is None:
+                self.fc_shared_cls = self.generate_fc(self.feature_dim, nb_classes)
+            else:
+                self.fc_shared_cls.update(nb_classes, freeze_old=False)
+        self._ensure_expert_calibration_params()
 
     def generate_fc(self, in_dim, out_dim): 
         fc = TunaLinear(in_dim, out_dim)
         return fc
+
+    def _ensure_expert_calibration_params(self):
+        if not self.enable_expert_calibration or self.fc is None or not hasattr(self.fc, "heads"):
+            return
+
+        target_heads = len(self.fc.heads)
+        while len(self.expert_calibration_log_scale) < target_heads:
+            self.expert_calibration_log_scale.append(nn.Parameter(torch.zeros(1, device=self._device)))
+            self.expert_calibration_bias.append(nn.Parameter(torch.zeros(1, device=self._device)))
+
+    def get_expert_calibration_scale(self, expert_id):
+        if not self.enable_expert_calibration or expert_id >= len(self.expert_calibration_log_scale):
+            return None
+        return torch.exp(self.expert_calibration_log_scale[expert_id])
+
+    def calibrate_expert_logits(self, logits, expert_id):
+        scale = self.get_expert_calibration_scale(expert_id)
+        if scale is None or expert_id >= len(self.expert_calibration_bias):
+            return logits
+        return scale * logits + self.expert_calibration_bias[expert_id]
+
+    def forward_shared_cls(self, x, train=False):
+        if self.fc_shared_cls is None:
+            raise RuntimeError("fc_shared_cls is not initialized.")
+        res = self.backbone(x, adapter_id=-1, train=train)
+        cls_features = res["cls_features"]
+        return {
+            "cls_features": cls_features,
+            "logits": self.fc_shared_cls(cls_features)["logits"],
+        }
 
     def forward_orig(self, x):
         features = self.backbone(x, adapter_id=0)['features']
