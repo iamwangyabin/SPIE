@@ -1,6 +1,6 @@
 {
     "prefix": "spie-v11-expert-vera-cifar",
-    "dataset": "cifar100_vit",
+    "dataset": "cifar224",
     "memory_size": 0,
     "shuffle": false,
     "init_cls": 10,
