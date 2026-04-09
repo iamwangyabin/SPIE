@@ -539,6 +539,53 @@ def get_backbone(args, pretrained=False):
         else:
             raise NotImplementedError("Unknown type {}".format(name))
         return model
+    elif "_spie_v12" in name or "_spiev12" in name:
+        ffn_num = 16
+        from backbone import vit_spie_v12
+        from easydict import EasyDict
+        tuning_config = EasyDict(
+            ffn_adapt=True,
+            ffn_option="parallel",
+            ffn_adapter_layernorm_option="none",
+            ffn_adapter_init_option="lora",
+            ffn_adapter_scalar="0.1",
+            ffn_num=ffn_num,
+            d_model=768,
+            _device=args["device"][0],
+            vpt_on=False,
+            vpt_num=0,
+        )
+        common_kwargs = dict(
+            num_classes=args["nb_classes"],
+            global_pool=False,
+            drop_path_rate=0.0,
+            tuning_config=tuning_config,
+            r=args["r"],
+            expert_tokens=args.get("expert_tokens", 4),
+            vera_rank=args.get("vera_rank", 256),
+            vera_dropout=args.get("vera_dropout", 0.0),
+            vera_d_initial=args.get("vera_d_initial", 0.1),
+            vera_projection_seed=args.get("vera_projection_seed", 0),
+            vera_save_projection=args.get("vera_save_projection", True),
+            shared_vera_rank=args.get("shared_vera_rank", args.get("vera_rank", 256)),
+            shared_vera_dropout=args.get("shared_vera_dropout", args.get("vera_dropout", 0.0)),
+            shared_vera_d_initial=args.get("shared_vera_d_initial", args.get("vera_d_initial", 0.1)),
+            shared_vera_projection_seed=args.get(
+                "shared_vera_projection_seed",
+                args.get("vera_projection_seed", 0),
+            ),
+            shared_vera_save_projection=args.get(
+                "shared_vera_save_projection",
+                args.get("vera_save_projection", True),
+            ),
+        )
+        if name == "vit_base_patch16_224_spie_v12" or name == "vit_base_patch16_224_spiev12":
+            model = vit_spie_v12.vit_base_patch16_224_spie_v12(**common_kwargs)
+        elif name == "vit_base_patch16_224_in21k_spie_v12" or name == "vit_base_patch16_224_in21k_spiev12":
+            model = vit_spie_v12.vit_base_patch16_224_in21k_spie_v12(**common_kwargs)
+        else:
+            raise NotImplementedError("Unknown type {}".format(name))
+        return model
     elif "_spie_v11" in name or "_spiev11" in name:
         ffn_num = 16
         from backbone import vit_spie_v11
