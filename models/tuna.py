@@ -94,6 +94,33 @@ class Learner(BaseLearner):
             return self._network.backbone.module
         return self._network.backbone
 
+    def _build_safe_distribution(self, mean, covariance):
+        mean = mean.to(self._device, dtype=torch.float32)
+        if covariance.ndim == 1:
+            covariance = torch.diag(covariance)
+
+        covariance = covariance.to(self._device, dtype=torch.float64)
+        covariance = torch.nan_to_num(covariance, nan=0.0, posinf=0.0, neginf=0.0)
+        covariance = 0.5 * (covariance + covariance.T)
+
+        base_jitter = float(self.args.get("covariance_regularization", 1e-4))
+        max_retry_power = int(self.args.get("max_covariance_retry_power", 6))
+        eye = torch.eye(covariance.shape[-1], device=covariance.device, dtype=covariance.dtype)
+
+        for power in range(max_retry_power + 1):
+            jitter = base_jitter * (10 ** power)
+            repaired_covariance = covariance + eye * jitter
+            _, info = torch.linalg.cholesky_ex(repaired_covariance)
+            if torch.all(info == 0):
+                scale_tril = torch.linalg.cholesky(repaired_covariance).to(dtype=torch.float32)
+                return MultivariateNormal(mean, scale_tril=scale_tril)
+
+        min_eigenvalue = torch.linalg.eigvalsh(covariance).min().item()
+        jitter = max(base_jitter, -min_eigenvalue + base_jitter)
+        repaired_covariance = covariance + eye * jitter
+        scale_tril = torch.linalg.cholesky(repaired_covariance).to(dtype=torch.float32)
+        return MultivariateNormal(mean, scale_tril=scale_tril)
+
     def after_task(self):
         self._known_classes = self._total_classes
 
@@ -315,9 +342,7 @@ class Learner(BaseLearner):
                     else:
                         mean = self.cls_mean[class_idx].to(self._device)
                     cov = self.cls_cov[class_idx].to(self._device)
-                    if self.args["ca_storage_efficient_method"] == 'variance':
-                        cov = torch.diag(cov)
-                    m = MultivariateNormal(mean.float(), cov.float())
+                    m = self._build_safe_distribution(mean, cov)
                     sampled_data_single = m.sample(sample_shape=(num_sampled_pcls,))
                     sampled_data.append(sampled_data_single)
 
