@@ -173,12 +173,13 @@ class Learner(BaseLearner):
             num_workers=num_workers,
         )
 
-        if len(self._multiple_gpus) > 1:
+        use_backbone_dataparallel = bool(self.args.get("spie_v13_backbone_dataparallel", False))
+        if use_backbone_dataparallel and len(self._multiple_gpus) > 1:
             self._network.backbone = nn.DataParallel(self._network.backbone, self._multiple_gpus)
 
         self._train(self.train_loader, self.test_loader)
 
-        if len(self._multiple_gpus) > 1:
+        if use_backbone_dataparallel and len(self._multiple_gpus) > 1:
             self._network.backbone = self._backbone_module()
 
     def _make_optimizer(self, network_params):
