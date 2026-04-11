@@ -443,6 +443,18 @@ class VisionTransformer(TunaMaxVisionTransformer):
             "expert_features": expert_features,
         }
 
+    def forward_head(self, res):
+        x = res["x"]
+        res["logits"] = self.head(x)
+        return res
+
+    def forward(self, x, adapter_id=-1, train=False, fc_only=False):
+        if fc_only:
+            return {"logits": self.head(x)}
+
+        res = self.forward_features(x, adapter_id, train)
+        return self.forward_head(res)
+
 
 def _load_pretrained_and_refresh_expert_svd(model, timm_name, num_classes):
     model = _load_pretrained_from_timm(model, timm_name, num_classes)
