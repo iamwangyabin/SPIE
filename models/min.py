@@ -80,6 +80,7 @@ class Learner(BaseLearner):
 
         if self._cur_task == 0:
             self._network.update_fc(data_manager.get_task_size(self._cur_task))
+            self._network.update_noise()
             run_loader = DataLoader(
                 train_dataset,
                 batch_size=self.init_batch_size,
@@ -87,7 +88,6 @@ class Learner(BaseLearner):
                 num_workers=self.num_workers,
             )
             prototype = self._get_task_prototype(run_loader)
-            self._network.update_noise()
             self._network.extend_task_prototype(prototype)
             self._run_noise_learning(run_loader)
             self._network.update_task_prototype(self._get_task_prototype(run_loader))

@@ -139,6 +139,9 @@ class PiNoise(nn.Module):
 
         x_down = hyper_features @ self.w_down
 
+        if len(self.mu) == 0 or self.weight_noise is None:
+            return x1 + hyper_features
+
         noise = None
 
         for i in range(len(self.mu)):
@@ -157,6 +160,9 @@ class PiNoise(nn.Module):
         x1 = self.MLP(hyper_features)
 
         x_down = hyper_features @ self.w_down
+
+        if len(self.mu) == 0 or self.weight_noise is None:
+            return x1 + hyper_features
 
         mu = self.mu[-1](x_down)
         sigmma = self.sigmma[-1](x_down)
