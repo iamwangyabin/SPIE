@@ -32,6 +32,8 @@ def get_model(model_name, args):
         from models.spie import Learner
     elif name == "onlymax":
         from models.onlymax import Learner
+    elif name == "min":
+        from models.min import Learner
     else:
-        raise ValueError("Supported model names are 'tuna', 'tunamax', 'spie_v2', 'spie_v3', 'spie_v4', 'spie_v5', 'spie_v6', 'spie_v7', 'spie_v8', 'spie_v9', 'spie_v10', 'spie_v11', 'spie_v12', 'spie_v13', 'spie', and 'onlymax'.")
+        raise ValueError("Supported model names are 'tuna', 'tunamax', 'spie_v2', 'spie_v3', 'spie_v4', 'spie_v5', 'spie_v6', 'spie_v7', 'spie_v8', 'spie_v9', 'spie_v10', 'spie_v11', 'spie_v12', 'spie_v13', 'spie', 'onlymax', and 'min'.")
     return Learner(args)
