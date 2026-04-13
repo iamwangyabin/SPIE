@@ -204,6 +204,9 @@ def prepare_checkpoint_structure(model, data_manager, task_id, state_dict):
     for mapped_task_id in range(current_heads, task_id + 1):
         model._network.update_fc(data_manager.get_task_size(mapped_task_id))
 
+    if hasattr(model, "_prepare_task_modules_for_load"):
+        model._prepare_task_modules_for_load(task_id, data_manager, state_dict)
+
     current_adapters = len(backbone.adapter_list) if hasattr(backbone, "adapter_list") else task_id + 1
     for _ in range(current_adapters, task_id + 1):
         if hasattr(backbone, "adapter_update"):

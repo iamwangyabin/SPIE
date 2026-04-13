@@ -190,6 +190,9 @@ def prepare_tunamax_style_modules(model, data_manager: DataManager, task_id: int
         for mapped_task_id in range(current_heads, task_id + 1):
             model._network.update_fc(data_manager.get_task_size(mapped_task_id))
 
+    if hasattr(model, "_prepare_task_modules_for_load"):
+        model._prepare_task_modules_for_load(task_id, data_manager, state_dict)
+
     backbone = get_backbone(model)
     if backbone is None:
         return
