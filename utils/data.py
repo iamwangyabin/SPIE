@@ -1,3 +1,4 @@
+import os
 import numpy as np
 from torchvision import datasets, transforms
 from utils.toolkit import split_images_labels
@@ -235,6 +236,40 @@ class iImageNetR(iData):
         self.test_data, self.test_targets = split_images_labels(test_dset.imgs)
 
 
+class iDomainNet(iData):
+    def __init__(self, args):
+        super().__init__()
+        self.args = args
+        self.use_path = True
+
+        if args["model_name"] == "coda_prompt":
+            self.train_trsf = build_transform_coda_prompt(True, args)
+            self.test_trsf = build_transform_coda_prompt(False, args)
+        else:
+            self.train_trsf = build_transform(True, args)
+            self.test_trsf = build_transform(False, args)
+        self.common_trsf = []
+
+        self.class_order = np.arange(200).tolist()
+
+    def download_data(self):
+        rootdir = self.args.get("domainnet_root", "./data/domainnet")
+        train_txt = self.args.get(
+            "domainnet_train_txt", "./utils/datautils/domainnet/train.txt"
+        )
+        test_txt = self.args.get(
+            "domainnet_test_txt", "./utils/datautils/domainnet/test.txt"
+        )
+
+        train_images, train_labels = _load_path_label_list(rootdir, train_txt)
+        test_images, test_labels = _load_path_label_list(rootdir, test_txt)
+
+        self.train_data = train_images
+        self.train_targets = train_labels
+        self.test_data = test_images
+        self.test_targets = test_labels
+
+
 class iImageNetA(iData):
     use_path = True
     
@@ -343,3 +378,15 @@ class vtab(iData):
 
         self.train_data, self.train_targets = split_images_labels(train_dset.imgs)
         self.test_data, self.test_targets = split_images_labels(test_dset.imgs)
+
+
+def _load_path_label_list(rootdir, txt_path):
+    images = []
+    labels = []
+    with open(txt_path, "r") as dict_file:
+        for line in dict_file:
+            value, key = line.strip().split(" ")
+            images.append(os.path.join(rootdir, value))
+            labels.append(int(key))
+
+    return np.array(images), np.array(labels)
