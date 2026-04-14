@@ -106,7 +106,7 @@ class Learner(SPiEV13Learner):
         self._network.enable_expert_calibration = False
         self.expert_head_gamma = float(args.get("expert_head_gamma", 500.0))
         self.expert_head_fit_epochs = int(args.get("expert_head_fit_epochs", args.get("fit_epochs", 3)))
-        self.expert_head_normalize_input = bool(args.get("expert_head_normalize_input", True))
+        self.expert_head_normalize_input = bool(args.get("expert_head_normalize_input", False))
         self.expert_head_buffer_size = int(args.get("expert_head_buffer_size", 0))
         self.expert_head_use_relu_buffer = bool(args.get("expert_head_use_relu_buffer", True))
         self.expert_head_fit_batch_size = int(
