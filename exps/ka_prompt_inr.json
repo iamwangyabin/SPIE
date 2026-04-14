@@ -11,7 +11,10 @@
     "backbone_type": "vit_base_patch16_224_in21k_ka_prompt",
     "device": ["0"],
     "seed": [1993],
-
+    "swanlab": true,
+    "swanlab_project": "SPIE",
+    "swanlab_mode": "online",
+    
     "tuned_epoch": 10,
     "init_lr": 0.005,
     "batch_size": 32,
