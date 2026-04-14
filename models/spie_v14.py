@@ -5,6 +5,7 @@ import numpy as np
 import torch
 from torch import nn
 from torch.nn import functional as F
+from torch.utils.data import DataLoader
 
 from models.spie_v13 import Learner as SPiEV13Learner
 
@@ -108,19 +109,38 @@ class Learner(SPiEV13Learner):
         self.expert_head_normalize_input = bool(args.get("expert_head_normalize_input", True))
         self.expert_head_buffer_size = int(args.get("expert_head_buffer_size", 0))
         self.expert_head_use_relu_buffer = bool(args.get("expert_head_use_relu_buffer", True))
+        self.expert_head_fit_batch_size = int(
+            args.get("expert_head_fit_batch_size", args.get("buffer_batch", 1000))
+        )
         self.expert_unavailable_logit = float(args.get("expert_unavailable_logit", -1e4))
         self.expert_calibration_epochs = 0
 
         self._network.expert_analytical_heads = nn.ModuleList()
         logging.info(
-            "SPiE v14 analytical expert heads: fit_epochs=%s, gamma=%s, normalize_input=%s, buffer_size=%s, relu_buffer=%s.",
+            "SPiE v14 analytical expert heads: fit_epochs=%s, fit_batch_size=%s, gamma=%s, normalize_input=%s, buffer_size=%s, relu_buffer=%s.",
             self.expert_head_fit_epochs,
+            self.expert_head_fit_batch_size,
             self.expert_head_gamma,
             self.expert_head_normalize_input,
             self.expert_head_buffer_size,
             self.expert_head_use_relu_buffer,
         )
         logging.info("SPiE v14 disables expert calibration and uses raw analytical expert logits at evaluation.")
+
+    def _make_analytical_fit_loader(self, source_loader, shuffle):
+        batch_size = max(int(self.expert_head_fit_batch_size), 1)
+        if getattr(source_loader, "batch_size", None) == batch_size:
+            return source_loader
+
+        return DataLoader(
+            source_loader.dataset,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            num_workers=source_loader.num_workers,
+            drop_last=False,
+            pin_memory=getattr(source_loader, "pin_memory", False),
+            persistent_workers=getattr(source_loader, "persistent_workers", False),
+        )
 
     def _append_analytical_head(self, class_offset):
         backbone_device = next(self._network.backbone.parameters()).device
@@ -157,12 +177,13 @@ class Learner(SPiEV13Learner):
         if not active_expert_ids:
             return
 
+        analytical_loader = self._make_analytical_fit_loader(train_loader, shuffle=True)
         self._ensure_current_analytical_head()
         self._network.backbone.eval()
-        total_batches = max(len(train_loader), 1)
+        total_batches = max(len(analytical_loader), 1)
 
         for epoch in range(self.expert_head_fit_epochs):
-            for batch_idx, (_, inputs, targets) in enumerate(train_loader, start=1):
+            for batch_idx, (_, inputs, targets) in enumerate(analytical_loader, start=1):
                 inputs = inputs.to(self._device)
                 targets = targets.to(self._device)
 
@@ -196,11 +217,12 @@ class Learner(SPiEV13Learner):
         if not active_expert_ids:
             return
 
+        analytical_loader = self._make_analytical_fit_loader(train_loader, shuffle=True)
         self._ensure_current_analytical_head()
         self._network.backbone.eval()
-        total_batches = max(len(train_loader), 1)
+        total_batches = max(len(analytical_loader), 1)
 
-        for batch_idx, (_, inputs, targets) in enumerate(train_loader, start=1):
+        for batch_idx, (_, inputs, targets) in enumerate(analytical_loader, start=1):
             inputs = inputs.to(self._device)
             targets = targets.to(self._device)
 
