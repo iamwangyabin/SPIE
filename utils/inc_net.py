@@ -234,7 +234,7 @@ def get_backbone(args, pretrained=False):
             else:
                 raise NotImplementedError("Unknown type {}".format(name))
             return model
-    elif "_spie_v13" in name or "_spiev13" in name:
+    elif "_spie_v13" in name:
         ffn_num = 16
         from backbone import vit_spie_v13
         from easydict import EasyDict
@@ -257,19 +257,16 @@ def get_backbone(args, pretrained=False):
             tuning_config=tuning_config,
             r=args["r"],
             expert_tokens=args.get("expert_tokens", 4),
-            lora_rank=args.get("lora_rank", 8),
-            lora_alpha=args.get("lora_alpha", 1.0),
-            shared_lora_rank=args.get("shared_lora_rank", args.get("lora_rank", 8)),
-            shared_lora_alpha=args.get("shared_lora_alpha", args.get("lora_alpha", 1.0)),
+            shared_lora_rank=args.get("shared_lora_rank", 8),
+            shared_lora_alpha=args.get("shared_lora_alpha", 1.0),
             vera_rank=args.get("vera_rank", 256),
             vera_dropout=args.get("vera_dropout", 0.0),
             vera_d_initial=args.get("vera_d_initial", 0.1),
-            vera_projection_seed=args.get("vera_projection_seed", 0),
             vera_save_projection=args.get("vera_save_projection", True),
         )
-        if name == "vit_base_patch16_224_spie_v13" or name == "vit_base_patch16_224_spiev13":
+        if name == "vit_base_patch16_224_spie_v13":
             model = vit_spie_v13.vit_base_patch16_224_spie_v13(**common_kwargs)
-        elif name == "vit_base_patch16_224_in21k_spie_v13" or name == "vit_base_patch16_224_in21k_spiev13":
+        elif name == "vit_base_patch16_224_in21k_spie_v13":
             model = vit_spie_v13.vit_base_patch16_224_in21k_spie_v13(**common_kwargs)
         else:
             raise NotImplementedError("Unknown type {}".format(name))

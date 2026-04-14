@@ -36,21 +36,6 @@ class MLPLoRAAdapter(nn.Module):
         self.up_proj = self.fc2_lora.up_proj
 
 
-class CaSSLePredictor(nn.Module):
-    def __init__(self, dim, hidden_dim=None):
-        super().__init__()
-        hidden_dim = int(hidden_dim or dim)
-        self.net = nn.Sequential(
-            nn.LayerNorm(dim),
-            nn.Linear(dim, hidden_dim),
-            nn.GELU(),
-            nn.Linear(hidden_dim, dim),
-        )
-
-    def forward(self, x):
-        return self.net(x)
-
-
 class VeraLinear(nn.Module):
     """VeRA delta branch with trainable lambda_d/lambda_b only."""
 
@@ -241,28 +226,20 @@ class VisionTransformer(TunaMaxVisionTransformer):
         self,
         *args,
         expert_tokens=4,
-        lora_rank=8,
-        lora_alpha=1.0,
-        shared_lora_rank=None,
-        shared_lora_alpha=None,
+        shared_lora_rank=8,
+        shared_lora_alpha=1.0,
         vera_rank=256,
         vera_dropout=0.0,
         vera_d_initial=0.1,
-        vera_projection_seed=0,
         vera_save_projection=True,
-        cassle_predictor_hidden_dim=None,
         **kwargs,
     ):
-        self.lora_rank = int(lora_rank)
-        self.lora_alpha = float(lora_alpha)
-        self.shared_lora_rank = int(shared_lora_rank if shared_lora_rank is not None else lora_rank)
-        self.shared_lora_alpha = float(shared_lora_alpha if shared_lora_alpha is not None else lora_alpha)
+        self.shared_lora_rank = int(shared_lora_rank)
+        self.shared_lora_alpha = float(shared_lora_alpha)
         self.vera_rank = int(vera_rank)
         self.vera_dropout = float(vera_dropout)
         self.vera_d_initial = float(vera_d_initial)
-        self.vera_projection_seed = int(vera_projection_seed)
         self.vera_save_projection = bool(vera_save_projection)
-        self.cassle_predictor_hidden_dim = cassle_predictor_hidden_dim
         super().__init__(*args, **kwargs)
         if expert_tokens <= 0:
             raise ValueError(f"expert_tokens must be > 0, got {expert_tokens}")
@@ -273,7 +250,6 @@ class VisionTransformer(TunaMaxVisionTransformer):
         self.blocks = nn.ModuleList([MLPMixedAdapterBlock(block) for block in self.blocks])
         self.refresh_expert_vera_projections_from_backbone_weights()
         self.init_shared_adapters()
-        self.cassle_predictor = CaSSLePredictor(self.embed_dim, hidden_dim=self.cassle_predictor_hidden_dim)
         self._mask_cache = {}
 
     def refresh_expert_vera_projections_from_backbone_weights(self):
@@ -337,7 +313,6 @@ class VisionTransformer(TunaMaxVisionTransformer):
             adapter.requires_grad_(True)
         self.cur_expert_tokens.requires_grad = True
         self.cur_shared_adapter.requires_grad_(True)
-        self.cassle_predictor.requires_grad_(True)
 
     def adapter_update(self):
         frozen_adapter = copy.deepcopy(self.cur_adapter)
@@ -525,7 +500,3 @@ def vit_base_patch16_224_in21k_spie_v13(pretrained=False, **kwargs):
         **kwargs,
     )
     return _load_pretrained_and_refresh_expert_svd(model, "vit_base_patch16_224_in21k", kwargs["num_classes"])
-
-
-vit_base_patch16_224_spiev13 = vit_base_patch16_224_spie_v13
-vit_base_patch16_224_in21k_spiev13 = vit_base_patch16_224_in21k_spie_v13

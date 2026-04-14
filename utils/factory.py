@@ -4,7 +4,7 @@ def get_model(model_name, args):
         from models.tuna import Learner
     elif name == "tunamax":
         from models.tunamax import Learner
-    elif name == "spie_v13" or name == "spiev13":
+    elif name == "spie_v13":
         from models.spie_v13 import Learner
     elif name == "onlymax":
         from models.onlymax import Learner

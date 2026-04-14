@@ -36,7 +36,6 @@ class Learner(BaseLearner):
         self.shared_cls_mean = dict()
         self.shared_cls_cov = dict()
 
-        self.use_orth = False
         self.batch_size = args["batch_size"]
         self.init_lr = args["init_lr"]
         self.weight_decay = args["weight_decay"] if args["weight_decay"] is not None else 0.0005
@@ -46,14 +45,12 @@ class Learner(BaseLearner):
         self.ca_lr = args["ca_lr"]
         self.crct_epochs = args["crct_epochs"]
 
-        self.share_lora_lr = float(args.get("share_lora_lr", self.init_lr * args.get("share_lora_lr_scale", 0.1)))
         self.share_lora_weight_decay = float(args.get("share_lora_weight_decay", self.weight_decay))
 
         self.task0_shared_epochs = int(args.get("task0_shared_epochs", args["tuned_epoch"]))
         self.task0_expert_epochs = int(args.get("task0_expert_epochs", args["tuned_epoch"]))
         self.task0_shared_lr = float(args.get("task0_shared_lr", self.init_lr * args.get("task0_shared_lr_scale", 1.0)))
         self.task0_expert_lr = float(args.get("task0_expert_lr", self.init_lr))
-        self.task0_copy_shared_to_expert = False
         self.incremental_expert_epochs = int(args.get("incremental_expert_epochs", args["tuned_epoch"]))
         self.incremental_expert_lr = float(
             args.get("incremental_expert_lr", self.init_lr * args.get("incremental_expert_lr_scale", 1.0))
@@ -86,11 +83,8 @@ class Learner(BaseLearner):
                 "cur_adapter" in name
                 or "cur_expert_tokens" in name
                 or "cur_shared_adapter" in name
-                or "cassle_predictor" in name
                 or "head" in name
             )
-
-        self._freeze_unused_shared_predictor()
 
         total_params = sum(p.numel() for p in self._network.backbone.parameters())
         total_trainable_params = sum(p.numel() for p in self._network.backbone.parameters() if p.requires_grad)
@@ -204,11 +198,6 @@ class Learner(BaseLearner):
             return None
         raise ValueError(f"Unsupported scheduler: {self.args['scheduler']}")
 
-    def _freeze_unused_shared_predictor(self):
-        backbone = self._backbone_module()
-        if hasattr(backbone, "cassle_predictor"):
-            backbone.cassle_predictor.requires_grad_(False)
-
     def _set_shared_lora_requires_grad(self, requires_grad):
         self._backbone_module().cur_shared_adapter.requires_grad_(requires_grad)
 
@@ -219,10 +208,6 @@ class Learner(BaseLearner):
 
     def _freeze_shared_domain_adapter(self):
         self._set_shared_lora_requires_grad(False)
-
-    def _copy_shared_lora_to_current_expert(self):
-        backbone = self._backbone_module()
-        backbone.cur_adapter.load_state_dict(backbone.cur_shared_adapter.state_dict())
 
     def _swap_in_temporary_fc(self):
         main_fc = self._network.fc
@@ -354,8 +339,6 @@ class Learner(BaseLearner):
 
         if self._cur_task == 0:
             self._train_task0_shared_lora(train_loader)
-            if self.task0_copy_shared_to_expert and self.task0_shared_epochs > 0:
-                self._copy_shared_lora_to_current_expert()
             self._train_task0_expert(train_loader)
         else:
             self._train_incremental_expert(train_loader)
