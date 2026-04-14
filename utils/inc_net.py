@@ -271,6 +271,33 @@ def get_backbone(args, pretrained=False):
         else:
             raise NotImplementedError("Unknown type {}".format(name))
         return model
+    elif "_ka_prompt" in name:
+        from backbone import ka_prompt
+
+        if name == "vit_base_patch16_224_ka_prompt":
+            basic_model_name = "vit_base_patch16_224"
+        elif name == "vit_base_patch16_224_in21k_ka_prompt":
+            basic_model_name = "vit_base_patch16_224_in21k"
+        else:
+            raise NotImplementedError("Unknown type {}".format(name))
+
+        model = ka_prompt.KAPromptBackbone(
+            model_name=basic_model_name,
+            pretrained=args.get("pretrained", True),
+            pool_size=args.get("pool_size", args.get("nb_tasks", 1) * args.get("prompt_per_task", 1)),
+            prompt_num=args.get("prompt_num", 8),
+            gprompt_num=args.get("gprompt_num", 4),
+            top_k=args.get("ka_top_k", 2),
+            prompt_per_task=args.get("prompt_per_task", 4),
+            query_pos=args.get("query_pos", -1),
+            layer_g=args.get("layer_g", [0, 1]),
+            layer_e=args.get("layer_e", [2, 3, 4]),
+            init_type=args.get("prompt_init_type", "unif"),
+            prompt_comp=args.get("prompt_comp", True),
+            fuse_prompt=args.get("fuse_prompt", True),
+            use_prompt_mask=args.get("use_prompt_mask", True),
+        )
+        return model
     elif '_tunamax' in name:
         ffn_num = 16
         from backbone import vit_tunamax
