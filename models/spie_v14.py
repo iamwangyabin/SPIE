@@ -4,10 +4,8 @@ import numpy as np
 import torch
 from torch import nn
 from torch.nn import functional as F
-from tqdm import tqdm
 
 from models.spie_v13 import Learner as SPiEV13Learner
-from utils.toolkit import tensor2numpy
 
 
 class AnalyticalExpertHead(nn.Module):
@@ -80,10 +78,13 @@ class Learner(SPiEV13Learner):
 
     def __init__(self, args):
         super().__init__(args)
+        self.args["enable_expert_calibration"] = False
+        self._network.enable_expert_calibration = False
         self.expert_head_gamma = float(args.get("expert_head_gamma", 500.0))
         self.expert_head_fit_epochs = int(args.get("expert_head_fit_epochs", args.get("fit_epochs", 3)))
         self.expert_head_normalize_input = bool(args.get("expert_head_normalize_input", True))
         self.expert_unavailable_logit = float(args.get("expert_unavailable_logit", -1e4))
+        self.expert_calibration_epochs = 0
 
         self._network.expert_analytical_heads = nn.ModuleList()
         logging.info(
@@ -92,6 +93,7 @@ class Learner(SPiEV13Learner):
             self.expert_head_gamma,
             self.expert_head_normalize_input,
         )
+        logging.info("SPiE v14 disables expert calibration and uses raw analytical expert logits at evaluation.")
 
     def _append_analytical_head(self, class_offset):
         backbone_device = next(self._network.backbone.parameters()).device
@@ -160,115 +162,41 @@ class Learner(SPiEV13Learner):
                 num_experts=len(active_expert_ids),
             )
 
-    def _build_global_expert_logits(self, local_logits, head):
-        batch_size = local_logits.shape[0]
-        logits = local_logits.new_full((batch_size, self._total_classes), self.expert_unavailable_logit)
+    def _build_global_expert_scores(self, local_scores, head, fill_value):
+        batch_size = local_scores.shape[0]
+        scores = local_scores.new_full((batch_size, self._total_classes), fill_value)
         class_offset = int(head.class_offset.item())
-        if class_offset >= self._total_classes or local_logits.shape[1] == 0:
-            return logits
+        if class_offset >= self._total_classes or local_scores.shape[1] == 0:
+            return scores
 
-        usable_classes = min(local_logits.shape[1], self._total_classes - class_offset)
-        logits[:, class_offset : class_offset + usable_classes] = local_logits[:, :usable_classes]
-        return logits
+        usable_classes = min(local_scores.shape[1], self._total_classes - class_offset)
+        scores[:, class_offset : class_offset + usable_classes] = local_scores[:, :usable_classes]
+        return scores
 
-    def _stack_calibrated_expert_logits(self, inputs, active_expert_ids):
-        logits_per_expert = []
+    def _stack_expert_probabilities(self, inputs, active_expert_ids):
+        probs_per_expert = []
         for expert_id in active_expert_ids:
             features = self._network.backbone(inputs, adapter_id=expert_id, train=False)["features"]
             head = self._network.expert_analytical_heads[expert_id]
-            logits = self._build_global_expert_logits(head(features), head)
-            logits_per_expert.append(self._network.calibrate_expert_logits(logits, expert_id))
-        return torch.stack(logits_per_expert, dim=0)
+            local_logits = head(features)
+            local_probs = F.softmax(local_logits, dim=1)
+            probs = self._build_global_expert_scores(local_probs, head, fill_value=0.0)
+            probs_per_expert.append(probs)
+        return torch.stack(probs_per_expert, dim=0)
+
+    def _best_expert_probabilities(self, stacked_probs):
+        return stacked_probs.max(dim=0).values
+
+    def _shared_cls_probabilities(self, inputs):
+        if self._network.fc_shared_cls is None:
+            return None
+        cls_features = self._network.backbone(inputs, adapter_id=-1, train=False)["cls_features"]
+        shared_logits = self._network.fc_shared_cls(cls_features)["logits"][:, : self._total_classes]
+        return F.softmax(self.args["scale"] * shared_logits, dim=1)
 
     def _train_expert_calibration(self, train_loader):
-        if self.expert_calibration_epochs <= 0:
-            return
-
-        active_expert_ids = self._active_expert_ids()
-        if not active_expert_ids:
-            return
-
-        optimizer = self._expert_calibration_optimizer()
-        scheduler = self._get_scheduler_for_epochs(optimizer, self.expert_calibration_epochs)
-        prog_bar = tqdm(range(self.expert_calibration_epochs))
-
-        backbone_params = list(self._network.backbone.parameters())
-        calibration_params = list(self._network.expert_calibration_log_scale) + list(self._network.expert_calibration_bias)
-        backbone_grad_flags = [param.requires_grad for param in backbone_params]
-        calibration_grad_flags = [param.requires_grad for param in calibration_params]
-
-        try:
-            self._network.backbone.eval()
-            for param in backbone_params:
-                param.requires_grad = False
-            for param in calibration_params:
-                param.requires_grad = True
-
-            routing_temperature = max(self.expert_calibration_routing_temperature, 1e-8)
-            for _, epoch in enumerate(prog_bar):
-                losses = 0.0
-                correct, total = 0, 0
-
-                for _, (_, inputs, targets) in enumerate(train_loader):
-                    inputs = inputs.to(self._device)
-                    targets = targets.to(self._device)
-
-                    frozen_logits = []
-                    with torch.no_grad():
-                        for expert_id in active_expert_ids:
-                            features = self._network.backbone(inputs, adapter_id=expert_id, train=False)["features"]
-                            head = self._network.expert_analytical_heads[expert_id]
-                            logits = self._build_global_expert_logits(head(features), head)
-                            frozen_logits.append(logits.detach())
-                    stacked_logits = torch.stack(
-                        [
-                            self._network.calibrate_expert_logits(logits, expert_id)
-                            for expert_id, logits in zip(active_expert_ids, frozen_logits)
-                        ],
-                        dim=0,
-                    )
-
-                    expert_scores = stacked_logits.max(dim=2).values
-                    expert_weights = F.softmax(expert_scores / routing_temperature, dim=0)
-                    fused_logits = (expert_weights.unsqueeze(-1) * stacked_logits).sum(dim=0)
-
-                    loss = F.cross_entropy(self.args["scale"] * fused_logits, targets)
-                    optimizer.zero_grad()
-                    loss.backward()
-                    optimizer.step()
-
-                    losses += loss.item()
-                    _, preds = torch.max(fused_logits, dim=1)
-                    correct += preds.eq(targets.expand_as(preds)).cpu().sum()
-                    total += len(targets)
-
-                if scheduler:
-                    scheduler.step()
-
-                train_acc = np.around(tensor2numpy(correct) * 100 / total, decimals=2)
-                lr = optimizer.param_groups[0]["lr"]
-                avg_loss = losses / len(train_loader)
-                info = "Task {}, expert_calibration, Epoch {}/{} => Loss {:.3f}, Train_accy {:.2f}".format(
-                    self._cur_task,
-                    epoch + 1,
-                    self.expert_calibration_epochs,
-                    avg_loss,
-                    train_acc,
-                )
-                self._record_extra_stage_epoch(
-                    stage="expert_calibration",
-                    epoch=epoch + 1,
-                    total_epochs=self.expert_calibration_epochs,
-                    loss=float(avg_loss),
-                    acc=float(train_acc),
-                    lr=float(lr),
-                )
-                prog_bar.set_description(info)
-        finally:
-            self._restore_requires_grad(backbone_params, backbone_grad_flags)
-            self._restore_requires_grad(calibration_params, calibration_grad_flags)
-
-        logging.info(info)
+        del train_loader
+        return
 
     def _train(self, train_loader, test_loader):
         del test_loader
@@ -300,3 +228,69 @@ class Learner(SPiEV13Learner):
         self._compute_shared_cls_mean(backbone)
         if self._cur_task > 0:
             self._classifier_align_shared_cls()
+
+    def eval_task(self):
+        y_pred, y_true = self._eval_cnn(self.test_loader)
+        cnn_accy = self._evaluate(y_pred, y_true)
+
+        if self._network.fc_shared_cls is not None:
+            y_pred, y_true = self._eval_shared_cls(self.test_loader)
+            nme_accy = self._evaluate(y_pred, y_true)
+        else:
+            nme_accy = None
+
+        return cnn_accy, nme_accy
+
+    def _eval_cnn(self, loader):
+        self._network.eval()
+        y_pred, y_true = [], []
+        active_expert_ids = self._active_expert_ids()
+
+        for _, (_, inputs, targets) in enumerate(loader):
+            inputs = inputs.to(self._device)
+
+            with torch.no_grad():
+                stacked_probs = self._stack_expert_probabilities(inputs, active_expert_ids)
+                scores = self._best_expert_probabilities(stacked_probs)
+
+            topk = min(self.topk, scores.shape[1])
+            predicts = torch.topk(scores, k=topk, dim=1, largest=True, sorted=True)[1]
+            if topk < self.topk:
+                pad = torch.full(
+                    (predicts.shape[0], self.topk - topk),
+                    -1,
+                    device=predicts.device,
+                    dtype=predicts.dtype,
+                )
+                predicts = torch.cat([predicts, pad], dim=1)
+
+            y_pred.append(predicts.cpu().numpy())
+            y_true.append(targets.cpu().numpy())
+
+        return np.concatenate(y_pred), np.concatenate(y_true)
+
+    def _eval_shared_cls(self, loader):
+        self._network.eval()
+        y_pred, y_true = [], []
+
+        for _, (_, inputs, targets) in enumerate(loader):
+            inputs = inputs.to(self._device)
+
+            with torch.no_grad():
+                scores = self._shared_cls_probabilities(inputs)
+
+            topk = min(self.topk, scores.shape[1])
+            predicts = torch.topk(scores, k=topk, dim=1, largest=True, sorted=True)[1]
+            if topk < self.topk:
+                pad = torch.full(
+                    (predicts.shape[0], self.topk - topk),
+                    -1,
+                    device=predicts.device,
+                    dtype=predicts.dtype,
+                )
+                predicts = torch.cat([predicts, pad], dim=1)
+
+            y_pred.append(predicts.cpu().numpy())
+            y_true.append(targets.cpu().numpy())
+
+        return np.concatenate(y_pred), np.concatenate(y_true)

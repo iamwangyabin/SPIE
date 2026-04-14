@@ -56,7 +56,7 @@
     "shared_update_epochs": 3,
     "shared_update_lr_scale": 0.02,
     "shared_ema_alpha": 0.05,
-    "expert_calibration_epochs": 5,
+    "expert_calibration_epochs": 0,
     "expert_calibration_lr_scale": 0.1,
     "expert_calibration_routing_temperature": 1.0,
     "shared_cls_epochs": 10,
