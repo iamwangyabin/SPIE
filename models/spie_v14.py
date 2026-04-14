@@ -1,4 +1,5 @@
 import logging
+import math
 
 import numpy as np
 import torch
@@ -9,17 +10,34 @@ from models.spie_v13 import Learner as SPiEV13Learner
 
 
 class AnalyticalExpertHead(nn.Module):
-    def __init__(self, in_features, class_offset, gamma=500.0, normalize_input=True):
+    def __init__(
+        self,
+        in_features,
+        class_offset,
+        gamma=500.0,
+        normalize_input=True,
+        buffer_size=0,
+        use_relu_buffer=True,
+    ):
         super().__init__()
         self.in_features = int(in_features)
         self.gamma = float(gamma)
         self.normalize_input = bool(normalize_input)
+        self.buffer_size = int(buffer_size)
+        self.use_relu_buffer = bool(use_relu_buffer)
+        self.projected_dim = self.buffer_size if self.buffer_size > 0 else self.in_features
 
         self.register_buffer("class_offset", torch.tensor(int(class_offset), dtype=torch.long))
-        self.register_buffer("weight", torch.zeros((self.in_features, 0), dtype=torch.double))
+        if self.buffer_size > 0:
+            projection = torch.empty((self.in_features, self.buffer_size), dtype=torch.double)
+            nn.init.kaiming_uniform_(projection, a=math.sqrt(5.0))
+            self.register_buffer("projection", projection)
+        else:
+            self.register_buffer("projection", torch.zeros((0, 0), dtype=torch.double))
+        self.register_buffer("weight", torch.zeros((self.projected_dim, 0), dtype=torch.double))
         self.register_buffer(
             "R",
-            torch.eye(self.in_features, dtype=torch.double) / max(self.gamma, 1e-8),
+            torch.eye(self.projected_dim, dtype=torch.double) / max(self.gamma, 1e-8),
         )
 
     @property
@@ -29,14 +47,19 @@ class AnalyticalExpertHead(nn.Module):
     def _prepare_features(self, features):
         if self.normalize_input:
             features = F.normalize(features, p=2, dim=1)
-        return features.to(dtype=self.weight.dtype, device=self.weight.device)
+        features = features.to(dtype=self.weight.dtype, device=self.weight.device)
+        if self.buffer_size > 0:
+            features = features @ self.projection
+            if self.use_relu_buffer:
+                features = F.relu(features)
+        return features
 
     def expand_output_dim(self, num_classes):
         num_classes = int(num_classes)
         if num_classes <= self.output_dim:
             return
         tail = torch.zeros(
-            (self.in_features, num_classes - self.output_dim),
+            (self.projected_dim, num_classes - self.output_dim),
             dtype=self.weight.dtype,
             device=self.weight.device,
         )
@@ -83,15 +106,19 @@ class Learner(SPiEV13Learner):
         self.expert_head_gamma = float(args.get("expert_head_gamma", 500.0))
         self.expert_head_fit_epochs = int(args.get("expert_head_fit_epochs", args.get("fit_epochs", 3)))
         self.expert_head_normalize_input = bool(args.get("expert_head_normalize_input", True))
+        self.expert_head_buffer_size = int(args.get("expert_head_buffer_size", 0))
+        self.expert_head_use_relu_buffer = bool(args.get("expert_head_use_relu_buffer", True))
         self.expert_unavailable_logit = float(args.get("expert_unavailable_logit", -1e4))
         self.expert_calibration_epochs = 0
 
         self._network.expert_analytical_heads = nn.ModuleList()
         logging.info(
-            "SPiE v14 analytical expert heads: fit_epochs=%s, gamma=%s, normalize_input=%s.",
+            "SPiE v14 analytical expert heads: fit_epochs=%s, gamma=%s, normalize_input=%s, buffer_size=%s, relu_buffer=%s.",
             self.expert_head_fit_epochs,
             self.expert_head_gamma,
             self.expert_head_normalize_input,
+            self.expert_head_buffer_size,
+            self.expert_head_use_relu_buffer,
         )
         logging.info("SPiE v14 disables expert calibration and uses raw analytical expert logits at evaluation.")
 
@@ -102,6 +129,8 @@ class Learner(SPiEV13Learner):
             class_offset=class_offset,
             gamma=self.expert_head_gamma,
             normalize_input=self.expert_head_normalize_input,
+            buffer_size=self.expert_head_buffer_size,
+            use_relu_buffer=self.expert_head_use_relu_buffer,
         ).to(backbone_device)
         self._network.expert_analytical_heads.append(head)
         return head
@@ -162,6 +191,43 @@ class Learner(SPiEV13Learner):
                 num_experts=len(active_expert_ids),
             )
 
+    def _refit_analytical_expert_heads(self, train_loader):
+        active_expert_ids = self._active_expert_ids()
+        if not active_expert_ids:
+            return
+
+        self._ensure_current_analytical_head()
+        self._network.backbone.eval()
+        total_batches = max(len(train_loader), 1)
+
+        for batch_idx, (_, inputs, targets) in enumerate(train_loader, start=1):
+            inputs = inputs.to(self._device)
+            targets = targets.to(self._device)
+
+            with torch.no_grad():
+                for expert_id in active_expert_ids:
+                    features = self._network.backbone(inputs, adapter_id=expert_id, train=False)["features"]
+                    self._network.expert_analytical_heads[expert_id].fit_batch(
+                        features=features,
+                        global_targets=targets,
+                        total_classes=self._total_classes,
+                    )
+
+            logging.info(
+                "Task %d --> Refit analytical expert heads (%d/%d)",
+                self._cur_task,
+                batch_idx,
+                total_batches,
+            )
+
+        self._record_extra_stage_epoch(
+            stage="refit_analytical_expert_heads",
+            epoch=1,
+            total_epochs=1,
+            num_experts=len(active_expert_ids),
+            batches=total_batches,
+        )
+
     def _build_global_expert_scores(self, local_scores, head, fill_value):
         batch_size = local_scores.shape[0]
         scores = local_scores.new_full((batch_size, self._total_classes), fill_value)
@@ -221,7 +287,8 @@ class Learner(SPiEV13Learner):
         self._set_current_expert_requires_grad(True)
         backbone_module.adapter_update()
 
-        self._fit_analytical_expert_heads(self.train_loader_for_protonet)
+        self._fit_analytical_expert_heads(train_loader)
+        self._refit_analytical_expert_heads(self.train_loader_for_protonet)
         self._train_expert_calibration(self.train_loader_for_protonet)
 
         self._train_shared_cls_classifier(train_loader)
