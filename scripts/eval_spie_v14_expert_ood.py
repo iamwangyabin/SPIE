@@ -1,11 +1,17 @@
 import argparse
 import json
 import logging
+import os
+import sys
 from collections import defaultdict
 
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, Subset
+
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
 
 from main import load_json
 from trainer import _set_device, _set_random, print_args
@@ -81,6 +87,7 @@ def _rebuild_spie_v14_from_checkpoint(model, data_manager, checkpoint):
         backbone.adapter_update()
         start = end
 
+    _materialize_detector_buffers_from_checkpoint(model, checkpoint["model_state_dict"])
     missing, unexpected = model._network.load_state_dict(checkpoint["model_state_dict"], strict=False)
     if missing or unexpected:
         raise RuntimeError(f"Checkpoint structure mismatch. Missing={missing}, unexpected={unexpected}")
@@ -88,6 +95,27 @@ def _rebuild_spie_v14_from_checkpoint(model, data_manager, checkpoint):
     model._network.to(model._device)
     model._network.eval()
     return task_id
+
+
+def _materialize_detector_buffers_from_checkpoint(model, state_dict):
+    for expert_id in range(len(model._network.task_ood_detectors)):
+        detector = model._network.get_task_ood_detector(expert_id)
+        for buffer_name in [
+            "class_centers",
+            "class_diag_vars",
+            "representatives",
+            "positive_bank",
+            "ood_bank",
+        ]:
+            key = f"task_ood_detectors.{expert_id}.{buffer_name}"
+            tensor = state_dict.get(key)
+            if tensor is None:
+                continue
+            setattr(
+                detector,
+                buffer_name,
+                tensor.detach().clone().to(device=model._device, dtype=torch.float32),
+            )
 
 
 @torch.no_grad()
