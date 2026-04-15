@@ -5,7 +5,6 @@ from collections import defaultdict
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 from torch.utils.data import DataLoader, Subset
 
 from main import load_json
@@ -18,18 +17,6 @@ def setup_parser():
     parser = argparse.ArgumentParser(description="Evaluate per-expert OOD blocking for SPiE v14 checkpoints.")
     parser.add_argument("--config", type=str, required=True, help="Experiment config JSON.")
     parser.add_argument("--checkpoint", type=str, required=True, help="Checkpoint path like logs/.../task_4.pkl.")
-    parser.add_argument(
-        "--threshold-quantile",
-        type=float,
-        default=0.05,
-        help="Acceptance threshold quantile computed from in-task train scores.",
-    )
-    parser.add_argument(
-        "--max-train-per-class",
-        type=int,
-        default=None,
-        help="Optional cap for threshold-estimation samples per class.",
-    )
     parser.add_argument(
         "--max-test-per-class",
         type=int,
@@ -104,62 +91,69 @@ def _rebuild_spie_v14_from_checkpoint(model, data_manager, checkpoint):
 
 
 @torch.no_grad()
-def _collect_expert_scores(model, loader, expert_id):
+def _collect_expert_scores_and_labels(model, loader, expert_id):
     detector = model._network.get_task_ood_detector(expert_id)
+    task_start, task_end = model.task_class_ranges[expert_id]
     score_chunks = []
+    label_chunks = []
 
-    for _, inputs, _ in loader:
+    for _, inputs, targets in loader:
         inputs = inputs.to(model._device)
         features = model._network.backbone(inputs, adapter_id=expert_id, train=False)["expert_features"]
         scores = detector.score_from_stats(detector.compute_stats(features))
         score_chunks.append(scores.detach().cpu())
+        labels = torch.logical_and(targets >= task_start, targets < task_end).to(dtype=torch.int64)
+        label_chunks.append(labels.cpu())
 
     if not score_chunks:
-        return torch.zeros(0, dtype=torch.float32)
-    return torch.cat(score_chunks, dim=0)
+        return torch.zeros(0, dtype=torch.float32), torch.zeros(0, dtype=torch.int64)
+    return torch.cat(score_chunks, dim=0), torch.cat(label_chunks, dim=0)
 
 
-@torch.no_grad()
-def _evaluate_single_expert(model, loader, expert_id, threshold):
-    detector = model._network.get_task_ood_detector(expert_id)
-    task_start, task_end = model.task_class_ranges[expert_id]
+def _binary_clf_curve(y_true, y_score):
+    order = np.argsort(y_score, kind="mergesort")[::-1]
+    y_true = y_true[order]
+    y_score = y_score[order]
 
-    in_total = 0
-    in_accept = 0
-    out_total = 0
-    out_block = 0
+    distinct_value_indices = np.where(np.diff(y_score))[0]
+    threshold_idxs = np.r_[distinct_value_indices, y_true.size - 1]
+    tps = np.cumsum(y_true)[threshold_idxs]
+    fps = 1 + threshold_idxs - tps
+    thresholds = y_score[threshold_idxs]
+    return fps.astype(np.float64), tps.astype(np.float64), thresholds.astype(np.float64)
 
-    for _, inputs, targets in loader:
-        inputs = inputs.to(model._device)
-        targets = targets.to(model._device)
 
-        features = model._network.backbone(inputs, adapter_id=expert_id, train=False)["expert_features"]
-        scores = detector.score_from_stats(detector.compute_stats(features))
-        accepted = scores >= threshold
-        in_mask = torch.logical_and(targets >= task_start, targets < task_end)
-        out_mask = ~in_mask
+def _compute_auroc(y_true, y_score):
+    y_true = np.asarray(y_true, dtype=np.int64)
+    y_score = np.asarray(y_score, dtype=np.float64)
+    pos_count = int(y_true.sum())
+    neg_count = int((1 - y_true).sum())
+    if pos_count == 0 or neg_count == 0:
+        return float("nan")
 
-        in_total += int(in_mask.sum().item())
-        in_accept += int(torch.logical_and(accepted, in_mask).sum().item())
-        out_total += int(out_mask.sum().item())
-        out_block += int(torch.logical_and(~accepted, out_mask).sum().item())
+    fps, tps, _ = _binary_clf_curve(y_true, y_score)
+    fpr = np.r_[0.0, fps / neg_count, 1.0]
+    tpr = np.r_[0.0, tps / pos_count, 1.0]
+    return float(np.trapz(tpr, fpr))
 
-    total = in_total + out_total
-    correct = in_accept + out_block
-    return {
-        "expert_id": expert_id,
-        "task_range": [task_start, task_end],
-        "threshold": float(threshold),
-        "in_task_total": in_total,
-        "in_task_accept": in_accept,
-        "in_task_reject": in_total - in_accept,
-        "in_task_accept_rate": round(in_accept / max(in_total, 1), 4),
-        "ood_total": out_total,
-        "ood_block": out_block,
-        "ood_leak": out_total - out_block,
-        "ood_block_rate": round(out_block / max(out_total, 1), 4),
-        "binary_acc": round(correct / max(total, 1), 4),
-    }
+
+def _compute_fpr95(y_true, y_score, target_tpr=0.95):
+    y_true = np.asarray(y_true, dtype=np.int64)
+    y_score = np.asarray(y_score, dtype=np.float64)
+    pos_count = int(y_true.sum())
+    neg_count = int((1 - y_true).sum())
+    if pos_count == 0 or neg_count == 0:
+        return float("nan"), float("nan")
+
+    fps, tps, thresholds = _binary_clf_curve(y_true, y_score)
+    fpr = fps / neg_count
+    tpr = tps / pos_count
+    meets_target = np.where(tpr >= target_tpr)[0]
+    if meets_target.size == 0:
+        return float("nan"), float("nan")
+
+    idx = int(meets_target[0])
+    return float(fpr[idx]), float(thresholds[idx])
 
 
 def main():
@@ -210,56 +204,49 @@ def main():
         "checkpoint": cli_args.checkpoint,
         "task_id": task_id,
         "total_classes": total_classes,
-        "threshold_quantile": cli_args.threshold_quantile,
-        "max_train_per_class": cli_args.max_train_per_class,
         "max_test_per_class": cli_args.max_test_per_class,
         "experts": [],
     }
 
     for expert_id, (start, end) in enumerate(model.task_class_ranges):
-        train_dataset = data_manager.get_dataset(np.arange(start, end), source="train", mode="test")
-        train_loader = _make_loader(
-            train_dataset,
-            batch_size=args["batch_size"],
-            num_workers=cli_args.num_workers,
-            max_per_class=cli_args.max_train_per_class,
-            shuffle=False,
-        )
-        positive_scores = _collect_expert_scores(model, train_loader, expert_id)
-        if positive_scores.numel() == 0:
-            raise RuntimeError(f"Expert {expert_id} has no positive scores for threshold estimation.")
+        scores, labels = _collect_expert_scores_and_labels(model, test_loader, expert_id)
+        scores_np = scores.numpy()
+        labels_np = labels.numpy()
+        auroc = _compute_auroc(labels_np, scores_np)
+        fpr95, threshold95 = _compute_fpr95(labels_np, scores_np, target_tpr=0.95)
+        id_mask = labels_np == 1
+        ood_mask = labels_np == 0
 
-        threshold = torch.quantile(positive_scores, q=cli_args.threshold_quantile).item()
-        expert_metrics = _evaluate_single_expert(model, test_loader, expert_id, threshold)
-        expert_metrics["threshold_score_min"] = float(positive_scores.min().item())
-        expert_metrics["threshold_score_mean"] = float(positive_scores.mean().item())
-        expert_metrics["threshold_score_max"] = float(positive_scores.max().item())
+        expert_metrics = {
+            "expert_id": expert_id,
+            "task_range": [start, end],
+            "num_id": int(id_mask.sum()),
+            "num_ood": int(ood_mask.sum()),
+            "auroc": round(auroc, 6) if not np.isnan(auroc) else None,
+            "fpr95": round(fpr95, 6) if not np.isnan(fpr95) else None,
+            "threshold_at_tpr95": round(threshold95, 6) if not np.isnan(threshold95) else None,
+            "id_score_mean": round(float(scores_np[id_mask].mean()), 6) if id_mask.any() else None,
+            "ood_score_mean": round(float(scores_np[ood_mask].mean()), 6) if ood_mask.any() else None,
+        }
         results["experts"].append(expert_metrics)
 
         logging.info(
-            "expert=%s task=%s-%s threshold=%.4f in_accept=%.4f ood_block=%.4f binary_acc=%.4f",
+            "expert=%s task=%s-%s num_id=%s num_ood=%s auroc=%s fpr95=%s threshold@tpr95=%s",
             expert_id,
             start,
             end,
-            expert_metrics["threshold"],
-            expert_metrics["in_task_accept_rate"],
-            expert_metrics["ood_block_rate"],
-            expert_metrics["binary_acc"],
+            expert_metrics["num_id"],
+            expert_metrics["num_ood"],
+            expert_metrics["auroc"],
+            expert_metrics["fpr95"],
+            expert_metrics["threshold_at_tpr95"],
         )
 
     if results["experts"]:
-        results["avg_ood_block_rate"] = round(
-            float(np.mean([item["ood_block_rate"] for item in results["experts"]])),
-            4,
-        )
-        results["avg_in_task_accept_rate"] = round(
-            float(np.mean([item["in_task_accept_rate"] for item in results["experts"]])),
-            4,
-        )
-        results["avg_binary_acc"] = round(
-            float(np.mean([item["binary_acc"] for item in results["experts"]])),
-            4,
-        )
+        valid_aurocs = [item["auroc"] for item in results["experts"] if item["auroc"] is not None]
+        valid_fpr95s = [item["fpr95"] for item in results["experts"] if item["fpr95"] is not None]
+        results["mean_auroc"] = round(float(np.mean(valid_aurocs)), 6) if valid_aurocs else None
+        results["mean_fpr95"] = round(float(np.mean(valid_fpr95s)), 6) if valid_fpr95s else None
 
     print(json.dumps(results, indent=2, ensure_ascii=False))
 
