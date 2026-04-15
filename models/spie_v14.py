@@ -803,7 +803,56 @@ class Learner(BaseLearner):
 
         return adjusted_logits
 
+    def _predict_topk(self, logits):
+        topk = min(self.topk, logits.shape[1])
+        predicts = torch.topk(logits, k=topk, dim=1, largest=True, sorted=True)[1]
+        if topk < self.topk:
+            pad = torch.full(
+                (predicts.shape[0], self.topk - topk),
+                -1,
+                device=predicts.device,
+                dtype=predicts.dtype,
+            )
+            predicts = torch.cat([predicts, pad], dim=1)
+        return predicts
+
+    def _expert_weighted_logits(self, inputs, active_expert_ids):
+        shared_logits = self._shared_cls_logits(inputs)
+        if not active_expert_ids:
+            return shared_logits
+
+        ood_out = self._network.forward_multi_expert_ood_scores(inputs, active_expert_ids)
+        task_weights = self._compute_task_prior_weights(ood_out["scores"])
+        return self._apply_task_prior(shared_logits, task_weights, active_expert_ids)
+
+    def eval_task(self):
+        cnn_pred, y_true = self._eval_cnn(self.test_loader)
+        cnn_accy = self._evaluate(cnn_pred, y_true)
+
+        nme_pred, nme_true = self._eval_nme(self.test_loader, class_means=None)
+        nme_accy = self._evaluate(nme_pred, nme_true)
+
+        return cnn_accy, nme_accy
+
     def _eval_cnn(self, loader):
+        self._network.eval()
+        y_pred, y_true = [], []
+
+        for _, (_, inputs, targets) in enumerate(loader):
+            inputs = inputs.to(self._device)
+
+            with torch.no_grad():
+                logits = self._shared_cls_logits(inputs)
+                predicts = self._predict_topk(logits)
+
+            y_pred.append(predicts.cpu().numpy())
+            y_true.append(targets.cpu().numpy())
+
+        return np.concatenate(y_pred), np.concatenate(y_true)
+
+    def _eval_nme(self, loader, class_means):
+        del class_means
+
         self._network.eval()
         y_pred, y_true = [], []
         active_expert_ids = self._active_expert_ids()
@@ -812,24 +861,8 @@ class Learner(BaseLearner):
             inputs = inputs.to(self._device)
 
             with torch.no_grad():
-                shared_logits = self._shared_cls_logits(inputs)
-                if active_expert_ids:
-                    ood_out = self._network.forward_multi_expert_ood_scores(inputs, active_expert_ids)
-                    task_weights = self._compute_task_prior_weights(ood_out["scores"])
-                    logits = self._apply_task_prior(shared_logits, task_weights, active_expert_ids)
-                else:
-                    logits = shared_logits
-
-            topk = min(self.topk, logits.shape[1])
-            predicts = torch.topk(logits, k=topk, dim=1, largest=True, sorted=True)[1]
-            if topk < self.topk:
-                pad = torch.full(
-                    (predicts.shape[0], self.topk - topk),
-                    -1,
-                    device=predicts.device,
-                    dtype=predicts.dtype,
-                )
-                predicts = torch.cat([predicts, pad], dim=1)
+                logits = self._expert_weighted_logits(inputs, active_expert_ids)
+                predicts = self._predict_topk(logits)
 
             y_pred.append(predicts.cpu().numpy())
             y_true.append(targets.cpu().numpy())
