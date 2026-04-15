@@ -19,49 +19,51 @@ num_workers = 8
 
 
 class TaskOODDetector(nn.Module):
-    """Lightweight task-OOD detector built on expert feature banks."""
+    """Prototype-based task scorer built on expert feature banks."""
 
     def __init__(self, feature_dim, hidden_dim=16, topk=5):
         super().__init__()
         self.feature_dim = int(feature_dim)
         self.topk = max(int(topk), 1)
-        hidden_dim = int(hidden_dim)
+        self.hidden_dim = int(hidden_dim)
         self.stat_dim = 6
-
-        if hidden_dim > 0:
-            self.calibrator = nn.Sequential(
-                nn.Linear(self.stat_dim, hidden_dim),
-                nn.ReLU(inplace=True),
-                nn.Linear(hidden_dim, 1),
-            )
-        else:
-            self.calibrator = nn.Linear(self.stat_dim, 1)
+        self.ood_score_topk = max(int(topk), 1)
 
         self.register_buffer("class_centers", torch.zeros(0, self.feature_dim))
+        self.register_buffer("class_diag_vars", torch.zeros(0, self.feature_dim))
         self.register_buffer("representatives", torch.zeros(0, self.feature_dim))
         self.register_buffer("positive_bank", torch.zeros(0, self.feature_dim))
+        self.register_buffer("ood_bank", torch.zeros(0, self.feature_dim))
+        self.score_eps = 1e-6
 
     @staticmethod
     def _normalize(x):
         return F.normalize(x, p=2, dim=-1)
 
     @torch.no_grad()
-    def set_feature_bank(self, class_centers, representatives):
+    def set_feature_bank(self, class_centers, class_diag_vars, representatives):
         if class_centers is None:
             class_centers = torch.zeros(0, self.feature_dim, device=self.class_centers.device)
+        if class_diag_vars is None:
+            class_diag_vars = torch.zeros(0, self.feature_dim, device=self.class_centers.device)
         if representatives is None:
             representatives = torch.zeros(0, self.feature_dim, device=self.class_centers.device)
 
         class_centers = class_centers.detach().to(device=self.class_centers.device, dtype=self.class_centers.dtype)
+        class_diag_vars = class_diag_vars.detach().to(device=self.class_centers.device, dtype=self.class_centers.dtype)
         representatives = representatives.detach().to(device=self.class_centers.device, dtype=self.class_centers.dtype)
 
         if class_centers.ndim == 1:
             class_centers = class_centers.unsqueeze(0)
+        if class_diag_vars.ndim == 1:
+            class_diag_vars = class_diag_vars.unsqueeze(0)
         if representatives.ndim == 1:
             representatives = representatives.unsqueeze(0)
 
         if class_centers.numel() > 0:
             class_centers = self._normalize(class_centers)
+        if class_diag_vars.numel() > 0:
+            class_diag_vars = torch.clamp(class_diag_vars, min=self.score_eps)
         if representatives.numel() > 0:
             representatives = self._normalize(representatives)
 
@@ -74,8 +76,20 @@ class TaskOODDetector(nn.Module):
             )
 
         self.class_centers = class_centers
+        self.class_diag_vars = class_diag_vars
         self.representatives = representatives
         self.positive_bank = positive_bank
+
+    @torch.no_grad()
+    def set_ood_bank(self, ood_bank):
+        if ood_bank is None:
+            ood_bank = torch.zeros(0, self.feature_dim, device=self.class_centers.device)
+        ood_bank = ood_bank.detach().to(device=self.class_centers.device, dtype=self.class_centers.dtype)
+        if ood_bank.ndim == 1:
+            ood_bank = ood_bank.unsqueeze(0)
+        if ood_bank.numel() > 0:
+            ood_bank = self._normalize(ood_bank)
+        self.ood_bank = ood_bank
 
     def compute_stats(self, features):
         features = features.float()
@@ -105,16 +119,39 @@ class TaskOODDetector(nn.Module):
             rep_mean = torch.zeros_like(rep_max)
             rep_global_mean = torch.zeros_like(rep_max)
 
-        feat_norm = features.norm(dim=1)
+        if self.ood_bank.numel() > 0:
+            ood_bank = self.ood_bank.to(device=device, dtype=normed_features.dtype)
+            ood_sims = normed_features @ ood_bank.T
+            ood_topk = min(self.ood_score_topk, ood_sims.shape[1])
+            ood_penalty = torch.topk(ood_sims, k=ood_topk, dim=1, largest=True, sorted=True).values.mean(dim=1)
+        else:
+            ood_penalty = torch.zeros(batch_size, device=device, dtype=normed_features.dtype)
+
+        if self.class_centers.numel() > 0 and self.class_diag_vars.numel() > 0:
+            centers = self.class_centers.to(device=device, dtype=normed_features.dtype)
+            diag_vars = self.class_diag_vars.to(device=device, dtype=normed_features.dtype)
+            diff = normed_features.unsqueeze(1) - centers.unsqueeze(0)
+            maha = (diff.pow(2) / torch.clamp(diag_vars.unsqueeze(0), min=self.score_eps)).mean(dim=2)
+            min_maha = maha.min(dim=1).values
+            topk_maha = torch.topk(
+                maha,
+                k=min(self.topk, maha.shape[1]),
+                dim=1,
+                largest=False,
+                sorted=True,
+            ).values
+            mean_topk_maha = topk_maha.mean(dim=1)
+        else:
+            min_maha = torch.full((batch_size,), 1e3, device=device, dtype=normed_features.dtype)
+            mean_topk_maha = min_maha
+
         return torch.stack(
-            [max_center, mean_center, rep_max, rep_mean, rep_global_mean, feat_norm],
+            [max_center, mean_center, rep_max, rep_mean, -min_maha, ood_penalty],
             dim=1,
         )
 
     def score_from_stats(self, stats):
-        base_score = stats[:, :4].mean(dim=1)
-        calib = self.calibrator(stats).squeeze(-1)
-        return base_score + calib
+        return stats[:, 2] + stats[:, 4] - stats[:, 5]
 
     def forward(self, features):
         stats = self.compute_stats(features)
@@ -133,6 +170,7 @@ class SPIEV14Net(nn.Module):
         self.task_ood_detectors = nn.ModuleList()
         self.task_ood_detector_hidden_dim = int(args.get("task_ood_detector_hidden_dim", 16))
         self.task_ood_detector_topk = int(args.get("task_ood_detector_topk", 5))
+        self.hard_ood_score_topk = int(args.get("hard_ood_score_topk", self.task_ood_detector_topk))
         self._device = args["device"][0]
 
     @property
@@ -162,6 +200,7 @@ class SPIEV14Net(nn.Module):
                     topk=self.task_ood_detector_topk,
                 ).to(self._device)
             )
+            self.task_ood_detectors[-1].ood_score_topk = max(self.hard_ood_score_topk, 1)
 
     def forward_shared_cls(self, x, train=False):
         if self.fc_shared_cls is None:
@@ -182,9 +221,9 @@ class SPIEV14Net(nn.Module):
         return self.task_ood_detectors[task_id]
 
     @torch.no_grad()
-    def set_task_ood_feature_bank(self, task_id, class_centers, representatives):
+    def set_task_ood_feature_bank(self, task_id, class_centers, class_diag_vars, representatives):
         detector = self.get_task_ood_detector(task_id)
-        detector.set_feature_bank(class_centers, representatives)
+        detector.set_feature_bank(class_centers, class_diag_vars, representatives)
 
     def forward_multi_expert_ood_scores(self, x, expert_ids):
         backbone = self.backbone.module if isinstance(self.backbone, nn.DataParallel) else self.backbone
@@ -251,11 +290,15 @@ class Learner(BaseLearner):
         self.expert_compactness_weight = float(args.get("expert_compactness_weight", 0.05))
 
         self.ood_repr_per_class = int(args.get("ood_repr_per_class", 8))
+        self.in_task_repr_per_class = int(args.get("in_task_repr_per_class", max(self.ood_repr_per_class, 24)))
+        self.hard_ood_per_task = int(args.get("hard_ood_per_task", 16))
+        self.hard_ood_score_topk = int(args.get("hard_ood_score_topk", 4))
         self.ood_calibration_epochs = int(args.get("ood_calibration_epochs", 5))
         self.ood_calibration_lr = float(args.get("ood_calibration_lr", self.init_lr * 0.1))
         self.ood_calibration_weight_decay = float(args.get("ood_calibration_weight_decay", 0.0))
         self.ood_score_temperature = float(args.get("ood_score_temperature", 1.0))
         self.ood_weight_alpha = float(args.get("ood_weight_alpha", 0.2))
+        self._expert_ood_task_memory = {}
 
         for name, param in self._network.backbone.named_parameters():
             param.requires_grad = (
@@ -284,6 +327,12 @@ class Learner(BaseLearner):
             self.incremental_expert_lr,
             self.ood_calibration_epochs,
             self.ood_calibration_lr,
+        )
+        logging.info(
+            "SPiE v14 memory: in_task_repr_per_class=%s, hard_ood_per_task=%s, hard_ood_score_topk=%s.",
+            self.in_task_repr_per_class,
+            self.hard_ood_per_task,
+            self.hard_ood_score_topk,
         )
 
     def _backbone_module(self):
@@ -637,6 +686,7 @@ class Learner(BaseLearner):
     def _update_current_task_ood_bank(self, model):
         model.eval()
         class_centers = []
+        class_diag_vars = []
         representatives = []
 
         for class_idx in range(self._known_classes, self._total_classes):
@@ -655,28 +705,20 @@ class Learner(BaseLearner):
             vectors = torch.cat(vectors, dim=0)
 
             center = F.normalize(vectors.mean(dim=0, keepdim=True), p=2, dim=1).squeeze(0)
+            diag_var = torch.var(vectors, dim=0, unbiased=False) + 1e-4
             class_centers.append(center)
+            class_diag_vars.append(diag_var)
 
-            rep_count = min(self.ood_repr_per_class, vectors.shape[0])
+            rep_count = min(self.in_task_repr_per_class, vectors.shape[0])
             if rep_count > 0:
                 similarities = vectors @ center.unsqueeze(1)
                 topk_indices = torch.topk(similarities.squeeze(1), k=rep_count, largest=True, sorted=True).indices
                 representatives.append(vectors[topk_indices])
 
         class_centers = torch.stack(class_centers, dim=0) if class_centers else torch.zeros(0, self.feature_dim)
+        class_diag_vars = torch.stack(class_diag_vars, dim=0) if class_diag_vars else torch.zeros(0, self.feature_dim)
         representatives = torch.cat(representatives, dim=0) if representatives else torch.zeros(0, self.feature_dim)
-        self._network.set_task_ood_feature_bank(self._cur_task, class_centers, representatives)
-
-    def _ood_calibration_optimizer(self, detector):
-        return self._make_optimizer(
-            [
-                {
-                    "params": detector.calibrator.parameters(),
-                    "lr": self.ood_calibration_lr,
-                    "weight_decay": self.ood_calibration_weight_decay,
-                }
-            ]
-        )
+        self._network.set_task_ood_feature_bank(self._cur_task, class_centers, class_diag_vars, representatives)
 
     def _sample_positive_features(self, detector, num_samples):
         positive_bank = detector.positive_bank
@@ -685,101 +727,55 @@ class Learner(BaseLearner):
         indices = torch.randint(0, positive_bank.shape[0], (num_samples,), device=positive_bank.device)
         return positive_bank[indices]
 
+    @torch.no_grad()
+    def _rebuild_expert_ood_bank(self, expert_id):
+        task_memory = self._expert_ood_task_memory.get(expert_id, {})
+        if task_memory:
+            ordered_tasks = sorted(task_memory.keys())
+            ood_bank = torch.cat([task_memory[task_id] for task_id in ordered_tasks], dim=0)
+        else:
+            ood_bank = torch.zeros(0, self.feature_dim, device=self._device)
+        self._network.get_task_ood_detector(expert_id).set_ood_bank(ood_bank)
+
+    @torch.no_grad()
+    def _collect_hard_ood_for_expert(self, expert_id, negative_loader):
+        detector = self._network.get_task_ood_detector(expert_id)
+        candidates = []
+        scores = []
+
+        self._network.backbone.eval()
+        for _, (_, inputs, _) in enumerate(negative_loader):
+            inputs = inputs.to(self._device)
+            features = self._network.backbone(inputs, adapter_id=expert_id, train=False)["expert_features"]
+            features = F.normalize(features, p=2, dim=1)
+            feature_scores = detector.score_from_stats(detector.compute_stats(features))
+            candidates.append(features.detach())
+            scores.append(feature_scores.detach())
+
+        if not candidates:
+            return torch.zeros(0, self.feature_dim, device=self._device)
+
+        candidates = torch.cat(candidates, dim=0)
+        scores = torch.cat(scores, dim=0)
+        keep = min(self.hard_ood_per_task, candidates.shape[0])
+        if keep <= 0:
+            return torch.zeros(0, self.feature_dim, device=self._device)
+        topk_indices = torch.topk(scores, k=keep, largest=True, sorted=True).indices
+        return candidates[topk_indices]
+
     def _update_historical_ood_detectors(self, train_loader):
-        if self.ood_calibration_epochs <= 0 or self._cur_task <= 0:
+        if self._cur_task <= 0 or self.hard_ood_per_task <= 0:
             return
 
         for expert_id in range(self._cur_task):
-            self._train_single_ood_detector(expert_id, train_loader)
+            hard_ood = self._collect_hard_ood_for_expert(expert_id, train_loader)
+            expert_memory = self._expert_ood_task_memory.setdefault(expert_id, {})
+            expert_memory[self._cur_task] = hard_ood
+            self._rebuild_expert_ood_bank(expert_id)
 
     def _train_single_ood_detector(self, expert_id, negative_loader):
-        detector = self._network.get_task_ood_detector(expert_id)
-        if detector.positive_bank.numel() == 0:
-            return
-
-        optimizer = self._ood_calibration_optimizer(detector)
-        scheduler = self._get_scheduler_for_epochs(optimizer, self.ood_calibration_epochs)
-        loss_fn = nn.BCEWithLogitsLoss()
-        prog_bar = tqdm(range(self.ood_calibration_epochs))
-
-        backbone_params = list(self._network.backbone.parameters())
-        backbone_grad_flags = [param.requires_grad for param in backbone_params]
-        detector_params = list(detector.parameters())
-        detector_grad_flags = [param.requires_grad for param in detector_params]
-
-        try:
-            self._network.backbone.eval()
-            for param in backbone_params:
-                param.requires_grad = False
-            for param in detector_params:
-                param.requires_grad = False
-            for param in detector.calibrator.parameters():
-                param.requires_grad = True
-
-            for _, epoch in enumerate(prog_bar):
-                losses = 0.0
-                correct, total = 0, 0
-
-                for _, (_, inputs, _) in enumerate(negative_loader):
-                    inputs = inputs.to(self._device)
-                    with torch.no_grad():
-                        neg_features = self._network.backbone(inputs, adapter_id=expert_id, train=False)["expert_features"]
-
-                    pos_features = self._sample_positive_features(detector, neg_features.shape[0])
-                    if pos_features is None:
-                        continue
-
-                    pos_features = pos_features.to(self._device, dtype=neg_features.dtype)
-                    pos_stats = detector.compute_stats(pos_features)
-                    neg_stats = detector.compute_stats(neg_features)
-
-                    logits = detector.score_from_stats(torch.cat((pos_stats, neg_stats), dim=0))
-                    labels = torch.cat(
-                        (
-                            torch.ones(pos_stats.shape[0], device=logits.device, dtype=logits.dtype),
-                            torch.zeros(neg_stats.shape[0], device=logits.device, dtype=logits.dtype),
-                        ),
-                        dim=0,
-                    )
-
-                    loss = loss_fn(logits, labels)
-                    optimizer.zero_grad()
-                    loss.backward()
-                    optimizer.step()
-
-                    losses += loss.item()
-                    preds = (torch.sigmoid(logits) >= 0.5).to(labels.dtype)
-                    correct += preds.eq(labels).sum().item()
-                    total += labels.numel()
-
-                if scheduler:
-                    scheduler.step()
-
-                avg_loss = losses / max(len(negative_loader), 1)
-                train_acc = 100.0 * correct / max(total, 1)
-                lr = optimizer.param_groups[0]["lr"]
-                info = "Task {}, ood_detector_{}, Epoch {}/{} => Loss {:.3f}, Train_accy {:.2f}".format(
-                    self._cur_task,
-                    expert_id,
-                    epoch + 1,
-                    self.ood_calibration_epochs,
-                    avg_loss,
-                    train_acc,
-                )
-                self._record_extra_stage_epoch(
-                    stage=f"ood_detector_{expert_id}",
-                    epoch=epoch + 1,
-                    total_epochs=self.ood_calibration_epochs,
-                    loss=float(avg_loss),
-                    acc=float(train_acc),
-                    lr=float(lr),
-                )
-                prog_bar.set_description(info)
-        finally:
-            self._restore_requires_grad(backbone_params, backbone_grad_flags)
-            self._restore_requires_grad(detector_params, detector_grad_flags)
-
-        logging.info(info)
+        del expert_id, negative_loader
+        return
 
     def _shared_cls_logits(self, inputs):
         cls_features = self._network.backbone(inputs, adapter_id=-1, train=False)["cls_features"]
