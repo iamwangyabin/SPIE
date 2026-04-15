@@ -239,6 +239,7 @@ class Learner(BaseLearner):
         self.shared_cls_weight_decay = float(args.get("shared_cls_weight_decay", self.weight_decay))
         self.shared_cls_ca_lr = float(args.get("shared_cls_ca_lr", self.ca_lr))
         self.shared_cls_crct_epochs = int(args.get("shared_cls_crct_epochs", self.crct_epochs))
+        self.freeze_shared_lora_after_task0 = bool(args.get("freeze_shared_lora_after_task0", True))
 
         self.task0_expert_epochs = int(args.get("task0_expert_epochs", args["tuned_epoch"]))
         self.task0_expert_lr = float(args.get("task0_expert_lr", self.init_lr))
@@ -268,11 +269,12 @@ class Learner(BaseLearner):
         logging.info("%s %s total backbone parameters.", f"{total_params:,}", self._spie_version_name)
         logging.info("%s %s trainable backbone parameters.", f"{total_trainable_params:,}", self._spie_version_name)
         logging.info(
-            "SPiE v14 shared branch: task0 epochs=%s lr=%s, incremental epochs=%s lr=%s.",
+            "SPiE v14 shared branch: task0 epochs=%s lr=%s, incremental epochs=%s lr=%s, freeze_shared_lora_after_task0=%s.",
             self.task0_shared_epochs,
             self.task0_shared_lr,
             self.shared_cls_epochs,
             self.shared_cls_lr,
+            self.freeze_shared_lora_after_task0,
         )
         logging.info(
             "SPiE v14 expert OOD branch: task0 epochs=%s lr=%s, incremental epochs=%s lr=%s, calib epochs=%s lr=%s.",
@@ -368,18 +370,23 @@ class Learner(BaseLearner):
 
     def _shared_branch_optimizer(self, lr):
         backbone = self._backbone_module()
-        network_params = [
-            {
-                "params": [p for p in backbone.cur_shared_adapter.parameters() if p.requires_grad],
-                "lr": lr,
-                "weight_decay": self.share_lora_weight_decay,
-            },
+        network_params = []
+        shared_lora_params = [p for p in backbone.cur_shared_adapter.parameters() if p.requires_grad]
+        if shared_lora_params:
+            network_params.append(
+                {
+                    "params": shared_lora_params,
+                    "lr": lr,
+                    "weight_decay": self.share_lora_weight_decay,
+                }
+            )
+        network_params.append(
             {
                 "params": self._network.fc_shared_cls.parameters(),
                 "lr": self.shared_cls_lr,
                 "weight_decay": self.shared_cls_weight_decay,
-            },
-        ]
+            }
+        )
         return self._make_optimizer(network_params)
 
     def _current_expert_optimizer(self, lr):
@@ -485,7 +492,8 @@ class Learner(BaseLearner):
         if epochs <= 0 or self._network.fc_shared_cls is None:
             return
 
-        self._set_shared_lora_requires_grad(True)
+        train_shared_lora = not self.freeze_shared_lora_after_task0 or self._cur_task == 0
+        self._set_shared_lora_requires_grad(train_shared_lora)
         self._set_current_expert_requires_grad(False)
 
         optimizer = self._shared_branch_optimizer(branch_lr)
@@ -536,6 +544,7 @@ class Learner(BaseLearner):
                 loss=float(avg_loss),
                 acc=float(train_acc),
                 lr=float(lr),
+                shared_lora_trainable=bool(train_shared_lora),
             )
             prog_bar.set_description(info)
 
