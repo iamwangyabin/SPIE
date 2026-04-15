@@ -35,6 +35,24 @@ class SimpleLinear(nn.Module):
         return {'logits': F.linear(input, self.weight, self.bias)}
 
 
+class AC_Linear(nn.Module):
+    def __init__(self, in_features, hidden, out_dim):
+        super().__init__()
+        self.in_features = in_features
+        self.hidden = hidden
+        self.out_features = out_dim
+        self.fc = nn.Sequential(
+            nn.Linear(self.in_features, self.hidden, bias=False),
+            nn.ReLU(),
+            nn.Linear(self.hidden, self.out_features, bias=False),
+        )
+
+    def forward(self, input):
+        hidden_feature = self.fc[:2](input)
+        out = self.fc(input)
+        return {"hidden_feature": hidden_feature, "logits": out}
+
+
 class CosineLinear(nn.Module):
     def __init__(self, in_features, out_features, nb_proxy=1, to_reduce=False, sigma=True):
         super(CosineLinear, self).__init__()
