@@ -9,25 +9,19 @@
     "increment": 20,
     "model_name": "spie_v14",
     "backbone_type": "vit_base_patch16_224_in21k_spie_v14",
-    "device": [
-        "2"
-    ],
-    "seed": [
-        1993
-    ],
+    "device": ["0"],
+    "seed": [1993],
     "swanlab": true,
     "swanlab_project": "SPIE",
     "swanlab_mode": "online",
-    "tuned_epoch": 10,
+    "tuned_epoch": 20,
     "init_lr": 0.02,
     "batch_size": 32,
     "weight_decay": 0.0005,
     "min_lr": 0,
     "optimizer": "sgd",
     "scheduler": "cosine",
-    "init_milestones": [
-        10
-    ],
+    "init_milestones": [10],
     "init_lr_decay": 0.1,
     "crct_epochs": 30,
     "ca_lr": 0.005,
