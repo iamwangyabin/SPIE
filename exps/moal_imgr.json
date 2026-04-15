@@ -21,5 +21,8 @@
     "weight_decay": 0.0005,
     "min_lr": 0.0,
     "ffn_num": 64,
-    "optimizer": "sgd"
+    "optimizer": "sgd",
+    "swanlab": true,
+    "swanlab_project": "SPIE",
+    "swanlab_mode": "online"
 }
