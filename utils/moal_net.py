@@ -10,6 +10,16 @@ from utils.timm_compat import patch_timm_dataclass_defaults
 patch_timm_dataclass_defaults()
 
 
+def _extract_features(backbone_output):
+    if isinstance(backbone_output, dict):
+        if "features" in backbone_output:
+            return backbone_output["features"]
+        if "pre_logits" in backbone_output:
+            return backbone_output["pre_logits"]
+        raise KeyError("Backbone output dict does not contain 'features' or 'pre_logits'.")
+    return backbone_output
+
+
 def get_moal_backbone(args, pretrained=False):
     name = args["backbone_type"].lower()
     if "_moal" not in name:
@@ -91,10 +101,10 @@ class SimpleVitNetAL(nn.Module):
         return AC_Linear(in_dim, hidden, out_dim)
 
     def extract_vector(self, x):
-        return self.backbone(x)
+        return _extract_features(self.backbone(x))
 
     def forward(self, x):
-        features = self.backbone(x)
+        features = _extract_features(self.backbone(x))
         if self.ac_model is None:
             out = self.fc(features)
             out["train_logits"] = out["logits"]
@@ -163,7 +173,7 @@ class MoALNet(nn.Module):
         self.fc = self.generate_fc(self._feature_dim, self.args["init_cls"]).to(self._device)
 
     def extract_vector(self, x):
-        features = [backbone(x) for backbone in self.backbones]
+        features = [_extract_features(backbone(x)) for backbone in self.backbones]
         return torch.cat(features, dim=1)
 
     def forward(self, x):
