@@ -18,9 +18,11 @@ def get_model(model_name, args):
         from models.min_ablation import Learner
     elif name == "moal":
         from models.moal import Learner
+    elif name == "mos":
+        from models.mos import Learner
     else:
         raise ValueError(
             "Supported model names are 'tuna', 'tunamax', 'spie_v13', 'spie_v14', "
-            "'ka_prompt', 'onlymax', 'min', 'min_ablation', and 'moal'."
+            "'ka_prompt', 'onlymax', 'min', 'min_ablation', 'moal', and 'mos'."
         )
     return Learner(args)
