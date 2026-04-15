@@ -282,8 +282,12 @@ class Learner(BaseLearner):
         ridge = self.optimise_ridge_parameter(embedding_list, Y)
         logging.info("gamma %s", ridge)
 
-        R = np.mat(auto_cor.cpu().numpy() + ridge * np.eye(model.ac_model.fc[-1].weight.size(1))).I
-        R = torch.tensor(R).float().to(self._device)
+        gram = auto_cor.float() + ridge * torch.eye(
+            model.ac_model.fc[-1].weight.size(1),
+            device=self._device,
+            dtype=auto_cor.dtype,
+        )
+        R = torch.linalg.inv(gram).float()
         delta = R @ crs_cor
         model.ac_model.fc[-1].weight = torch.nn.parameter.Parameter(torch.t(0.9 * delta.float()))
         self.R = R
