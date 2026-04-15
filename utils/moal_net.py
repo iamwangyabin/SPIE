@@ -29,6 +29,7 @@ def get_moal_backbone(args, pretrained=False):
         vpt_on=False,
         vpt_num=0,
     )
+    setattr(tuning_config, "_device", args["device"][0])
 
     if name == "vit_base_patch16_224_moal":
         model = vit_tuna.vit_base_patch16_224_adapter(
