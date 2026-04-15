@@ -271,6 +271,43 @@ def get_backbone(args, pretrained=False):
         else:
             raise NotImplementedError("Unknown type {}".format(name))
         return model
+    elif "_spie_v14" in name:
+        ffn_num = 16
+        from backbone import vit_spie_v14
+        from easydict import EasyDict
+        tuning_config = EasyDict(
+            ffn_adapt=True,
+            ffn_option="parallel",
+            ffn_adapter_layernorm_option="none",
+            ffn_adapter_init_option="lora",
+            ffn_adapter_scalar="0.1",
+            ffn_num=ffn_num,
+            d_model=768,
+            _device=args["device"][0],
+            vpt_on=False,
+            vpt_num=0,
+        )
+        common_kwargs = dict(
+            num_classes=args["nb_classes"],
+            global_pool=False,
+            drop_path_rate=0.0,
+            tuning_config=tuning_config,
+            r=args["r"],
+            expert_tokens=args.get("expert_tokens", 4),
+            shared_lora_rank=args.get("shared_lora_rank", 8),
+            shared_lora_alpha=args.get("shared_lora_alpha", 1.0),
+            vera_rank=args.get("vera_rank", 256),
+            vera_dropout=args.get("vera_dropout", 0.0),
+            vera_d_initial=args.get("vera_d_initial", 0.1),
+            vera_save_projection=args.get("vera_save_projection", True),
+        )
+        if name == "vit_base_patch16_224_spie_v14":
+            model = vit_spie_v14.vit_base_patch16_224_spie_v14(**common_kwargs)
+        elif name == "vit_base_patch16_224_in21k_spie_v14":
+            model = vit_spie_v14.vit_base_patch16_224_in21k_spie_v14(**common_kwargs)
+        else:
+            raise NotImplementedError("Unknown type {}".format(name))
+        return model
     elif "_ka_prompt" in name:
         from backbone import ka_prompt
 
@@ -1424,4 +1461,16 @@ class TUNANet(nn.Module):
 
     def forward(self, x, adapter_id=-1, train=False, fc_only=False):
         res = self.backbone(x, adapter_id, train, fc_only)
+        return res
+
+    def forward_multi_expert(self, x, expert_ids):
+        backbone = self.backbone.module if isinstance(self.backbone, nn.DataParallel) else self.backbone
+        if not hasattr(backbone, "forward_multi_expert_features"):
+            raise RuntimeError("Current backbone does not support parallel multi-expert inference.")
+
+        res = backbone.forward_multi_expert_features(x, expert_ids)
+        expert_features = res["features"]
+        expert_count, batch_size, feat_dim = expert_features.shape
+        logits = self.fc(expert_features.reshape(expert_count * batch_size, feat_dim))["logits"]
+        res["logits"] = logits.reshape(expert_count, batch_size, -1)
         return res
