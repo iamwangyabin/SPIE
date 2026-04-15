@@ -162,7 +162,11 @@ def _compute_auroc(y_true, y_score):
     fps, tps, _ = _binary_clf_curve(y_true, y_score)
     fpr = np.r_[0.0, fps / neg_count, 1.0]
     tpr = np.r_[0.0, tps / pos_count, 1.0]
-    return float(np.trapz(tpr, fpr))
+    # NumPy 2.x removed `np.trapz` in favor of `np.trapezoid`.
+    integrate_trapezoid = getattr(np, "trapezoid", None)
+    if integrate_trapezoid is None:
+        integrate_trapezoid = np.trapz
+    return float(integrate_trapezoid(tpr, fpr))
 
 
 def _compute_fpr95(y_true, y_score, target_tpr=0.95):
