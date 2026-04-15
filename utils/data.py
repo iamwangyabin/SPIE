@@ -3,6 +3,9 @@ import numpy as np
 from torchvision import datasets, transforms
 from utils.toolkit import split_images_labels
 
+IMAGENET_DEFAULT_MEAN = [0.485, 0.456, 0.406]
+IMAGENET_DEFAULT_STD = [0.229, 0.224, 0.225]
+
 
 class iData(object):
     train_trsf = []
@@ -119,6 +122,25 @@ def build_transform(is_train, args):
     # return transforms.Compose(t)
     return t
 
+
+def build_imagenet_r_transform(is_train):
+    if is_train:
+        return [
+            transforms.RandomResizedCrop(224, scale=(0.08, 1.0), ratio=(3.0 / 4.0, 4.0 / 3.0)),
+            transforms.RandomHorizontalFlip(p=0.5),
+            transforms.RandAugment(num_ops=2, magnitude=9),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=IMAGENET_DEFAULT_MEAN, std=IMAGENET_DEFAULT_STD),
+            transforms.RandomErasing(p=0.25, scale=(0.02, 0.2), ratio=(0.3, 3.3), value="random"),
+        ]
+
+    return [
+        transforms.Resize(256),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=IMAGENET_DEFAULT_MEAN, std=IMAGENET_DEFAULT_STD),
+    ]
+
 class iCIFAR224(iData):
     def __init__(self, args):
         super().__init__()
@@ -215,12 +237,13 @@ class iImageNetR(iData):
         if args["model_name"] == "coda_prompt":
             self.train_trsf = build_transform_coda_prompt(True, args)
             self.test_trsf = build_transform_coda_prompt(False, args)
+            self.common_trsf = [
+                # transforms.ToTensor(),
+            ]
         else:
-            self.train_trsf = build_transform(True, args)
-            self.test_trsf = build_transform(False, args)
-        self.common_trsf = [
-            # transforms.ToTensor(),
-        ]
+            self.train_trsf = build_imagenet_r_transform(True)
+            self.test_trsf = build_imagenet_r_transform(False)
+            self.common_trsf = []
 
         self.class_order = np.arange(200).tolist()
 
