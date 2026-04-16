@@ -463,13 +463,6 @@ class Learner(BaseLearner):
         scheduler = self._get_scheduler_for_epochs(optimizer, epochs)
         prog_bar = tqdm(range(epochs))
         expert_head = self._network.get_expert_head(self._cur_task)
-        expert_loss = AngularPenaltySMLoss(
-            loss_type=self.expert_loss_type,
-            eps=1e-7,
-            s=self.expert_loss_scale,
-            m=self.expert_loss_margin,
-        )
-
         for _, epoch in enumerate(prog_bar):
             self._network.backbone.train()
             expert_head.train()
@@ -481,9 +474,8 @@ class Learner(BaseLearner):
                 local_targets = targets - self._known_classes
                 expert_features = self._network.backbone(inputs, adapter_id=self._cur_task, train=True)["expert_features"]
                 expert_out = expert_head(expert_features)
-                cosine_logits = expert_out["cosine_logits"]
                 logits = expert_out["logits"]
-                loss = expert_loss(cosine_logits, local_targets)
+                loss = F.cross_entropy(logits, local_targets)
 
                 optimizer.zero_grad()
                 loss.backward()
