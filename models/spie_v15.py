@@ -34,6 +34,15 @@ class TaskLocalCosineHead(nn.Module):
         return {"cosine_logits": cosine_logits, "logits": logits}
 
 
+class TaskLocalLinearHead(nn.Module):
+    def __init__(self, in_dim, out_dim):
+        super().__init__()
+        self.fc = nn.Linear(in_dim, out_dim, bias=True)
+
+    def forward(self, x):
+        return {"logits": self.fc(x)}
+
+
 class SPIEV15Net(nn.Module):
     def __init__(self, args, pretrained):
         super().__init__()
@@ -60,7 +69,7 @@ class SPIEV15Net(nn.Module):
     def append_expert_head(self, nb_classes):
         for head in self.expert_heads:
             head.requires_grad_(False)
-        head = TaskLocalCosineHead(self.feature_dim, nb_classes, scale=self.local_head_scale).to(self._device)
+        head = TaskLocalLinearHead(self.feature_dim, nb_classes).to(self._device)
         self.expert_heads.append(head)
         return head
 
