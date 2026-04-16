@@ -26,11 +26,12 @@ class TaskLocalCosineHead(nn.Module):
         self.register_buffer("scale", torch.tensor(float(scale), dtype=torch.float32))
 
     def forward(self, x):
-        logits = self.scale.to(device=x.device, dtype=x.dtype) * F.linear(
+        cosine_logits = F.linear(
             F.normalize(x, p=2, dim=1),
             F.normalize(self.weight, p=2, dim=1),
         )
-        return {"logits": logits}
+        logits = self.scale.to(device=x.device, dtype=x.dtype) * cosine_logits
+        return {"cosine_logits": cosine_logits, "logits": logits}
 
 
 class SPIEV15Net(nn.Module):
@@ -125,6 +126,9 @@ class Learner(BaseLearner):
         self.incremental_expert_lr = float(
             args.get("incremental_expert_lr", self.init_lr * args.get("incremental_expert_lr_scale", 1.0))
         )
+        self.expert_loss_type = str(args.get("expert_loss_type", "cosface")).lower()
+        self.expert_loss_scale = float(args.get("expert_loss_scale", args.get("scale", 20.0)))
+        self.expert_loss_margin = float(args.get("expert_loss_margin", args.get("m", 0.0)))
 
         self.verifier_topk = min(int(args.get("verifier_topk", self.topk)), self.topk)
         self.verifier_local_topk = max(int(args.get("verifier_local_topk", 3)), 1)
@@ -154,11 +158,17 @@ class Learner(BaseLearner):
             self.freeze_shared_lora_after_task0,
         )
         logging.info(
-            "SPiE v15 expert verifier: task0 epochs=%s lr=%s, incremental epochs=%s lr=%s, topk=%s, local_topk=%s, alpha=%s.",
+            (
+                "SPiE v15 expert verifier: task0 epochs=%s lr=%s, incremental epochs=%s lr=%s, "
+                "loss=%s scale=%s margin=%s, topk=%s, local_topk=%s, alpha=%s."
+            ),
             self.task0_expert_epochs,
             self.task0_expert_lr,
             self.incremental_expert_epochs,
             self.incremental_expert_lr,
+            self.expert_loss_type,
+            self.expert_loss_scale,
+            self.expert_loss_margin,
             self.verifier_topk,
             self.verifier_local_topk,
             self.verifier_alpha,
@@ -453,6 +463,12 @@ class Learner(BaseLearner):
         scheduler = self._get_scheduler_for_epochs(optimizer, epochs)
         prog_bar = tqdm(range(epochs))
         expert_head = self._network.get_expert_head(self._cur_task)
+        expert_loss = AngularPenaltySMLoss(
+            loss_type=self.expert_loss_type,
+            eps=1e-7,
+            s=self.expert_loss_scale,
+            m=self.expert_loss_margin,
+        )
 
         for _, epoch in enumerate(prog_bar):
             self._network.backbone.train()
@@ -464,8 +480,10 @@ class Learner(BaseLearner):
                 inputs, targets = inputs.to(self._device), targets.to(self._device)
                 local_targets = targets - self._known_classes
                 expert_features = self._network.backbone(inputs, adapter_id=self._cur_task, train=True)["expert_features"]
-                logits = expert_head(expert_features)["logits"]
-                loss = F.cross_entropy(logits, local_targets)
+                expert_out = expert_head(expert_features)
+                cosine_logits = expert_out["cosine_logits"]
+                logits = expert_out["logits"]
+                loss = expert_loss(cosine_logits, local_targets)
 
                 optimizer.zero_grad()
                 loss.backward()
