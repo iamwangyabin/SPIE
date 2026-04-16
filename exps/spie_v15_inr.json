@@ -31,7 +31,7 @@
     "scale": 20.0,
     "m": 0.0,
     "expert_tokens": 4,
-    "expert_residual_scale": 0.1,
+    "expert_residual_scale": 0.5,
     "shared_lora_rank": 8,
     "shared_lora_alpha": 1.0,
     "vera_rank": 256,
