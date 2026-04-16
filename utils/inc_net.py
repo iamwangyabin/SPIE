@@ -308,6 +308,43 @@ def get_backbone(args, pretrained=False):
         else:
             raise NotImplementedError("Unknown type {}".format(name))
         return model
+    elif "_spie_v15" in name:
+        ffn_num = 16
+        from backbone import vit_spie_v15
+        from easydict import EasyDict
+        tuning_config = EasyDict(
+            ffn_adapt=True,
+            ffn_option="parallel",
+            ffn_adapter_layernorm_option="none",
+            ffn_adapter_init_option="lora",
+            ffn_adapter_scalar="0.1",
+            ffn_num=ffn_num,
+            d_model=768,
+            _device=args["device"][0],
+            vpt_on=False,
+            vpt_num=0,
+        )
+        common_kwargs = dict(
+            num_classes=args["nb_classes"],
+            global_pool=False,
+            drop_path_rate=0.0,
+            tuning_config=tuning_config,
+            r=args["r"],
+            expert_tokens=args.get("expert_tokens", 4),
+            shared_lora_rank=args.get("shared_lora_rank", 8),
+            shared_lora_alpha=args.get("shared_lora_alpha", 1.0),
+            vera_rank=args.get("vera_rank", 256),
+            vera_dropout=args.get("vera_dropout", 0.0),
+            vera_d_initial=args.get("vera_d_initial", 0.1),
+            vera_save_projection=args.get("vera_save_projection", True),
+        )
+        if name == "vit_base_patch16_224_spie_v15":
+            model = vit_spie_v15.vit_base_patch16_224_spie_v15(**common_kwargs)
+        elif name == "vit_base_patch16_224_in21k_spie_v15":
+            model = vit_spie_v15.vit_base_patch16_224_in21k_spie_v15(**common_kwargs)
+        else:
+            raise NotImplementedError("Unknown type {}".format(name))
+        return model
     elif "_ka_prompt" in name:
         from backbone import ka_prompt
 

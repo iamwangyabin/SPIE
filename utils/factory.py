@@ -8,6 +8,8 @@ def get_model(model_name, args):
         from models.spie_v13 import Learner
     elif name == "spie_v14":
         from models.spie_v14 import Learner
+    elif name == "spie_v15":
+        from models.spie_v15 import Learner
     elif name == "ka_prompt":
         from models.ka_prompt import Learner
     elif name == "onlymax":
@@ -22,7 +24,7 @@ def get_model(model_name, args):
         from models.mos import Learner
     else:
         raise ValueError(
-            "Supported model names are 'tuna', 'tunamax', 'spie_v13', 'spie_v14', "
+            "Supported model names are 'tuna', 'tunamax', 'spie_v13', 'spie_v14', 'spie_v15', "
             "'ka_prompt', 'onlymax', 'min', 'min_ablation', 'moal', and 'mos'."
         )
     return Learner(args)
