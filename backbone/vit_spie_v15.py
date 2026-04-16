@@ -226,6 +226,7 @@ class VisionTransformer(TunaMaxVisionTransformer):
         self,
         *args,
         expert_tokens=4,
+        expert_residual_scale=0.1,
         shared_lora_rank=8,
         shared_lora_alpha=1.0,
         vera_rank=256,
@@ -245,6 +246,7 @@ class VisionTransformer(TunaMaxVisionTransformer):
             raise ValueError(f"expert_tokens must be > 0, got {expert_tokens}")
 
         self.expert_tokens = int(expert_tokens)
+        self.expert_residual_scale = float(expert_residual_scale)
         self.cur_expert_tokens = self._init_expert_tokens_from_cls()
         self.expert_token_list = nn.ParameterList()
         self.blocks = nn.ModuleList([MLPMixedAdapterBlock(block) for block in self.blocks])
@@ -397,7 +399,8 @@ class VisionTransformer(TunaMaxVisionTransformer):
             if expert_tokens is None:
                 expert_features = cls_features
             else:
-                expert_features = x[:, -self.expert_tokens :, :].mean(dim=1)
+                expert_delta = x[:, -self.expert_tokens :, :].mean(dim=1)
+                expert_features = cls_features + self.expert_residual_scale * expert_delta
 
         return {
             "x": expert_features,
