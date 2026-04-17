@@ -416,8 +416,8 @@ class VisionTransformer(TunaMaxVisionTransformer):
                 expert_features = self._fuse_shared_expert_features(cls_features, expert_token_features)
 
         return {
-            "x": expert_features,
-            "pre_logits": expert_features,
+            "x": cls_features,
+            "pre_logits": cls_features,
             "features": expert_features,
             "cls_features": cls_features,
             "expert_features": expert_features,
