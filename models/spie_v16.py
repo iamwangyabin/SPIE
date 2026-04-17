@@ -59,6 +59,10 @@ class SPIEV16Net(nn.Module):
     def feature_dim(self):
         return self.backbone.out_dim
 
+    @property
+    def expert_feature_dim(self):
+        return self.backbone.out_dim * 2
+
     def generate_fc(self, in_dim, out_dim):
         return TunaLinear(in_dim, out_dim)
 
@@ -71,7 +75,7 @@ class SPIEV16Net(nn.Module):
     def append_expert_head(self, nb_classes):
         for head in self.expert_heads:
             head.requires_grad_(False)
-        head = TaskLocalLinearHead(self.feature_dim, nb_classes).to(self._device)
+        head = TaskLocalLinearHead(self.expert_feature_dim, nb_classes).to(self._device)
         self.expert_heads.append(head)
         self.expert_energy_mean_in = torch.cat((self.expert_energy_mean_in, self.expert_energy_mean_in.new_zeros(1)))
         self.expert_energy_std_in = torch.cat((self.expert_energy_std_in, self.expert_energy_std_in.new_ones(1)))

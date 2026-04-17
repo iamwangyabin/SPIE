@@ -353,6 +353,19 @@ class VisionTransformer(TunaMaxVisionTransformer):
         self._mask_cache[key] = mask
         return mask
 
+    def _fuse_shared_expert_features(self, cls_features, expert_tokens):
+        if expert_tokens is None:
+            return cls_features
+
+        if expert_tokens.ndim == 3:
+            expert_summary = expert_tokens[:, 0, :]
+        elif expert_tokens.ndim == 4:
+            expert_summary = expert_tokens[:, :, 0, :]
+        else:
+            raise ValueError(f"Unsupported expert token shape: {tuple(expert_tokens.shape)}")
+
+        return torch.cat((cls_features, expert_summary), dim=-1)
+
     def forward_features(self, x, adapter_id, train):
         bsz = x.shape[0]
         x = self.patch_embed(x)
@@ -399,8 +412,8 @@ class VisionTransformer(TunaMaxVisionTransformer):
             if expert_tokens is None:
                 expert_features = cls_features
             else:
-                expert_delta = x[:, -self.expert_tokens, :]
-                expert_features = cls_features + self.expert_residual_scale * expert_delta
+                expert_token_features = x[:, -self.expert_tokens :, :]
+                expert_features = self._fuse_shared_expert_features(cls_features, expert_token_features)
 
         return {
             "x": expert_features,
@@ -608,7 +621,7 @@ class VisionTransformer(TunaMaxVisionTransformer):
         expert_tokens = expert_tokens.reshape(expert_count, batch_size, num_expert_tokens, dim)
 
         cls_features = backbone_tokens[:, 0]
-        expert_features = expert_tokens.mean(dim=2)
+        expert_features = self._fuse_shared_expert_features(cls_features.unsqueeze(0).expand(expert_count, -1, -1), expert_tokens)
         return {
             "cls_features": cls_features,
             "expert_features": expert_features,
