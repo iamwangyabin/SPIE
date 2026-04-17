@@ -158,8 +158,6 @@ class Learner(BaseLearner):
         self.expert_loss_type = str(args.get("expert_loss_type", "cosface")).lower()
         self.expert_loss_scale = float(args.get("expert_loss_scale", args.get("scale", 20.0)))
         self.expert_loss_margin = float(args.get("expert_loss_margin", args.get("m", 0.0)))
-        self.energy_center_weight = float(args.get("energy_center_weight", 0.01))
-        self.energy_scale_weight = float(args.get("energy_scale_weight", 0.01))
         self.energy_topk = max(int(args.get("energy_topk", 5)), 1)
 
         self.verifier_topk = min(int(args.get("verifier_topk", self.topk)), self.topk)
@@ -192,14 +190,12 @@ class Learner(BaseLearner):
         logging.info(
             (
                 "SPiE v16 expert energy: task0 epochs=%s lr=%s, incremental epochs=%s lr=%s, "
-                "center_weight=%s, scale_weight=%s, energy_topk=%s, align_epochs=%s, align_weight=%s."
+                "energy_topk=%s, align_epochs=%s, align_weight=%s."
             ),
             self.task0_expert_epochs,
             self.task0_expert_lr,
             self.incremental_expert_epochs,
             self.incremental_expert_lr,
-            self.energy_center_weight,
-            self.energy_scale_weight,
             self.energy_topk,
             self.verifier_align_epochs,
             self.verifier_align_weight,
@@ -571,8 +567,6 @@ class Learner(BaseLearner):
             expert_head.train()
             losses = 0.0
             ce_losses = 0.0
-            center_losses = 0.0
-            scale_losses = 0.0
             batch_energy_means = 0.0
             batch_energy_stds = 0.0
             correct, total = 0, 0
@@ -585,13 +579,7 @@ class Learner(BaseLearner):
                 logits = expert_out["logits"]
                 energy_scores = self._energy_from_logits(logits)
                 ce_loss = F.cross_entropy(logits, local_targets)
-                energy_center_loss = energy_scores.mean().pow(2)
-                energy_scale_loss = (energy_scores.std(unbiased=False) - 1.0).pow(2)
-                loss = (
-                    ce_loss
-                    + self.energy_center_weight * energy_center_loss
-                    + self.energy_scale_weight * energy_scale_loss
-                )
+                loss = ce_loss
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -600,8 +588,6 @@ class Learner(BaseLearner):
 
                 losses += loss.item()
                 ce_losses += ce_loss.item()
-                center_losses += energy_center_loss.item()
-                scale_losses += energy_scale_loss.item()
                 batch_energy_means += energy_scores.mean().item()
                 batch_energy_stds += energy_scores.std(unbiased=False).item()
                 preds = torch.argmax(logits, dim=1) + self._known_classes
@@ -615,8 +601,6 @@ class Learner(BaseLearner):
             lr = optimizer.param_groups[0]["lr"]
             avg_loss = losses / len(train_loader)
             avg_ce_loss = ce_losses / len(train_loader)
-            avg_center_loss = center_losses / len(train_loader)
-            avg_scale_loss = scale_losses / len(train_loader)
             avg_energy_mean = batch_energy_means / len(train_loader)
             avg_energy_std = batch_energy_stds / len(train_loader)
             info = "Task {}, {}, Epoch {}/{} => Loss {:.3f}, Train_accy {:.2f}".format(
@@ -635,8 +619,6 @@ class Learner(BaseLearner):
                 lr=float(lr),
                 stage=stage,
                 ce_loss=float(avg_ce_loss),
-                energy_center_loss=float(avg_center_loss),
-                energy_scale_loss=float(avg_scale_loss),
                 batch_energy_mean=float(avg_energy_mean),
                 batch_energy_std=float(avg_energy_std),
             )
