@@ -34,6 +34,11 @@ from utils.data_manager import DataManager
 
 EPS = 1e-12
 
+try:
+    from tqdm.auto import tqdm
+except ImportError:
+    tqdm = None
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Deeper cosine-heavy post-hoc sweep for SPIE v16")
@@ -55,7 +60,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--candidate-task-from-topk", type=int, nargs="*", default=None)
     parser.add_argument("--class-rerank-topk", type=int, nargs="*", default=None)
     parser.add_argument("--max-shared-topk", type=int, default=20)
+    parser.add_argument("--progress", action="store_true", help="Show progress bars when tqdm is available.")
     return parser.parse_args()
+
+
+def maybe_tqdm(iterable, *, total: int | None = None, desc: str = "", enabled: bool = False):
+    if enabled and tqdm is not None:
+        return tqdm(iterable, total=total, desc=desc, dynamic_ncols=True)
+    return iterable
+
+
+def progress_log(enabled: bool, current: int, total: int, desc: str) -> None:
+    if not enabled or tqdm is not None or total <= 0:
+        return
+    checkpoints = {1, total}
+    for ratio in (0.1, 0.25, 0.5, 0.75, 0.9):
+        checkpoints.add(max(1, min(total, int(total * ratio))))
+    if current in checkpoints:
+        print(f"[progress] {desc}: {current}/{total} ({100.0 * current / total:.1f}%)")
 
 
 def logsumexp_np(x: np.ndarray, axis: int = -1) -> np.ndarray:
@@ -259,6 +281,7 @@ def extract_or_load_logits(
     force_recache: bool,
     cache_file: Path,
     base_cache: str | None,
+    show_progress: bool,
 ) -> Dict[str, Any]:
     if base_cache is not None:
         base_path = Path(base_cache)
@@ -295,8 +318,11 @@ def extract_or_load_logits(
     target_chunks: List[np.ndarray] = []
     expert_chunks: List[List[np.ndarray]] = [[] for _ in task_ids]
 
+    total_batches = len(loader) if hasattr(loader, "__len__") else None
     with torch.no_grad():
-        for _, (_, inputs, targets) in enumerate(loader):
+        for _, (_, inputs, targets) in enumerate(
+            maybe_tqdm(loader, total=total_batches, desc="extract_logits", enabled=show_progress), start=1
+        ):
             inputs = inputs.to(device)
             shared_logits = learner._shared_cls_logits(inputs)
             expert_logits_map = learner._collect_expert_logits(inputs, task_ids)
@@ -304,6 +330,8 @@ def extract_or_load_logits(
             target_chunks.append(targets.numpy().astype(np.int64))
             for task_id in task_ids:
                 expert_chunks[task_id].append(expert_logits_map[task_id].detach().cpu().numpy().astype(np.float32))
+            if total_batches is not None:
+                progress_log(show_progress, _, total_batches, "extract_logits")
 
     shared_logits_np = np.concatenate(shared_chunks, axis=0)
     targets_np = np.concatenate(target_chunks, axis=0)
@@ -694,6 +722,7 @@ def run_sweep(
     preset: str,
     output_dir: Path,
     max_shared_topk: int,
+    show_progress: bool,
 ) -> None:
     max_needed_topk = max([max_shared_topk, max(candidate_topk_values), max(rerank_topk_values), 10])
     shared_topk = rank_desc(shared_logits, topk=max_needed_topk)
@@ -774,6 +803,12 @@ def run_sweep(
 
     rows: List[Dict[str, Any]] = []
 
+    def product_total(*axes: Sequence[Any]) -> int:
+        total = 1
+        for axis in axes:
+            total *= len(axis)
+        return total
+
     def push_row(method_name: str, pred: np.ndarray, **params: Any) -> None:
         row = {
             "method": method_name,
@@ -791,14 +826,31 @@ def run_sweep(
 
     push_row("baseline_shared", baseline_pred)
 
-    for sim_name, candidate_topk, rerank_topk, alpha, apply_scope, candidate_task_mode in itertools.product(
+    loop_total = product_total(
         grids["sim_variants"],
         candidate_topk_values,
         rerank_topk_values,
         grids["alpha"],
         grids["apply_scope"],
         grids["candidate_task_mode"],
+    )
+    for idx, (sim_name, candidate_topk, rerank_topk, alpha, apply_scope, candidate_task_mode) in enumerate(
+        maybe_tqdm(
+            itertools.product(
+                grids["sim_variants"],
+                candidate_topk_values,
+                rerank_topk_values,
+                grids["alpha"],
+                grids["apply_scope"],
+                grids["candidate_task_mode"],
+            ),
+            total=loop_total,
+            desc="class_bonus_sim",
+            enabled=show_progress,
+        ),
+        start=1,
     ):
+        progress_log(show_progress, idx, loop_total, "class_bonus_sim")
         pred = method_class_bonus_generic(
             shared_logits=shared_logits,
             shared_topk=shared_topk,
@@ -822,7 +874,7 @@ def run_sweep(
             candidate_task_mode=candidate_task_mode,
         )
 
-    for sim_name, candidate_topk, rerank_topk, alpha, gate_q, apply_scope, candidate_task_mode in itertools.product(
+    loop_total = product_total(
         grids["sim_variants"],
         candidate_topk_values,
         rerank_topk_values,
@@ -830,7 +882,25 @@ def run_sweep(
         grids["gate_quantile"],
         grids["apply_scope"],
         grids["candidate_task_mode"],
+    )
+    for idx, (sim_name, candidate_topk, rerank_topk, alpha, gate_q, apply_scope, candidate_task_mode) in enumerate(
+        maybe_tqdm(
+            itertools.product(
+                grids["sim_variants"],
+                candidate_topk_values,
+                rerank_topk_values,
+                grids["alpha"],
+                grids["gate_quantile"],
+                grids["apply_scope"],
+                grids["candidate_task_mode"],
+            ),
+            total=loop_total,
+            desc="gated_sim_classgap",
+            enabled=show_progress,
+        ),
+        start=1,
     ):
+        progress_log(show_progress, idx, loop_total, "gated_sim_classgap")
         gate_threshold = float(np.quantile(top1_class_gap, gate_q))
         pred = method_class_bonus_generic(
             shared_logits=shared_logits,
@@ -860,7 +930,7 @@ def run_sweep(
             candidate_task_mode=candidate_task_mode,
         )
 
-    for sim_name, candidate_topk, rerank_topk, alpha, gate_q, apply_scope, candidate_task_mode in itertools.product(
+    loop_total = product_total(
         grids["sim_variants"],
         candidate_topk_values,
         rerank_topk_values,
@@ -868,7 +938,25 @@ def run_sweep(
         grids["gate_quantile"],
         grids["apply_scope"],
         grids["candidate_task_mode"],
+    )
+    for idx, (sim_name, candidate_topk, rerank_topk, alpha, gate_q, apply_scope, candidate_task_mode) in enumerate(
+        maybe_tqdm(
+            itertools.product(
+                grids["sim_variants"],
+                candidate_topk_values,
+                rerank_topk_values,
+                grids["alpha"],
+                grids["gate_quantile"],
+                grids["apply_scope"],
+                grids["candidate_task_mode"],
+            ),
+            total=loop_total,
+            desc="gated_sim_taskgap",
+            enabled=show_progress,
+        ),
+        start=1,
     ):
+        progress_log(show_progress, idx, loop_total, "gated_sim_taskgap")
         gate_threshold = float(np.quantile(top1_task_gap, gate_q))
         pred = method_class_bonus_generic(
             shared_logits=shared_logits,
@@ -898,7 +986,7 @@ def run_sweep(
             candidate_task_mode=candidate_task_mode,
         )
 
-    for sim_name, candidate_topk, rerank_topk, alpha, ref_mode, sign_mode, apply_scope, candidate_task_mode in itertools.product(
+    loop_total = product_total(
         grids["sim_variants"],
         candidate_topk_values,
         rerank_topk_values,
@@ -907,7 +995,35 @@ def run_sweep(
         grids["sign_mode"],
         grids["apply_scope"],
         grids["candidate_task_mode"],
+    )
+    for idx, (
+        sim_name,
+        candidate_topk,
+        rerank_topk,
+        alpha,
+        ref_mode,
+        sign_mode,
+        apply_scope,
+        candidate_task_mode,
+    ) in enumerate(
+        maybe_tqdm(
+            itertools.product(
+                grids["sim_variants"],
+                candidate_topk_values,
+                rerank_topk_values,
+                grids["alpha"],
+                grids["ref_mode"],
+                grids["sign_mode"],
+                grids["apply_scope"],
+                grids["candidate_task_mode"],
+            ),
+            total=loop_total,
+            desc="relative_sim",
+            enabled=show_progress,
+        ),
+        start=1,
     ):
+        progress_log(show_progress, idx, loop_total, "relative_sim")
         pred = method_class_bonus_generic(
             shared_logits=shared_logits,
             shared_topk=shared_topk,
@@ -936,7 +1052,7 @@ def run_sweep(
             candidate_task_mode=candidate_task_mode,
         )
 
-    for sim_name, candidate_topk, rerank_topk, alpha, ref_mode, sign_mode, gate_q, apply_scope, candidate_task_mode in itertools.product(
+    loop_total = product_total(
         grids["sim_variants"],
         candidate_topk_values,
         rerank_topk_values,
@@ -946,7 +1062,37 @@ def run_sweep(
         grids["gate_quantile"],
         grids["apply_scope"],
         grids["candidate_task_mode"],
+    )
+    for idx, (
+        sim_name,
+        candidate_topk,
+        rerank_topk,
+        alpha,
+        ref_mode,
+        sign_mode,
+        gate_q,
+        apply_scope,
+        candidate_task_mode,
+    ) in enumerate(
+        maybe_tqdm(
+            itertools.product(
+                grids["sim_variants"],
+                candidate_topk_values,
+                rerank_topk_values,
+                grids["alpha"],
+                grids["ref_mode"],
+                grids["sign_mode"],
+                grids["gate_quantile"],
+                grids["apply_scope"],
+                grids["candidate_task_mode"],
+            ),
+            total=loop_total,
+            desc="gated_relative_sim",
+            enabled=show_progress,
+        ),
+        start=1,
     ):
+        progress_log(show_progress, idx, loop_total, "gated_relative_sim")
         gate_threshold = float(np.quantile(top1_task_gap, gate_q))
         pred = method_class_bonus_generic(
             shared_logits=shared_logits,
@@ -981,7 +1127,7 @@ def run_sweep(
             candidate_task_mode=candidate_task_mode,
         )
 
-    for sim_name, local_variant, candidate_topk, rerank_topk, alpha, beta_local, apply_scope, candidate_task_mode, multiply_mode in itertools.product(
+    loop_total = product_total(
         grids["sim_variants"],
         grids["local_variant"],
         candidate_topk_values,
@@ -991,7 +1137,37 @@ def run_sweep(
         grids["apply_scope"],
         grids["candidate_task_mode"],
         grids["multiply_mode"],
+    )
+    for idx, (
+        sim_name,
+        local_variant,
+        candidate_topk,
+        rerank_topk,
+        alpha,
+        beta_local,
+        apply_scope,
+        candidate_task_mode,
+        multiply_mode,
+    ) in enumerate(
+        maybe_tqdm(
+            itertools.product(
+                grids["sim_variants"],
+                grids["local_variant"],
+                candidate_topk_values,
+                rerank_topk_values,
+                grids["alpha"],
+                grids["beta_local"],
+                grids["apply_scope"],
+                grids["candidate_task_mode"],
+                grids["multiply_mode"],
+            ),
+            total=loop_total,
+            desc="expert_local",
+            enabled=show_progress,
+        ),
+        start=1,
     ):
+        progress_log(show_progress, idx, loop_total, "expert_local")
         pred = method_class_bonus_expert_local(
             shared_logits=shared_logits,
             shared_topk=shared_topk,
@@ -1022,7 +1198,7 @@ def run_sweep(
             multiply_mode=multiply_mode,
         )
 
-    for sim_name, local_variant, candidate_topk, rerank_topk, alpha, beta_local, gate_q, apply_scope, candidate_task_mode, multiply_mode in itertools.product(
+    loop_total = product_total(
         grids["sim_variants"],
         grids["local_variant"],
         candidate_topk_values,
@@ -1033,7 +1209,39 @@ def run_sweep(
         grids["apply_scope"],
         grids["candidate_task_mode"],
         grids["multiply_mode"],
+    )
+    for idx, (
+        sim_name,
+        local_variant,
+        candidate_topk,
+        rerank_topk,
+        alpha,
+        beta_local,
+        gate_q,
+        apply_scope,
+        candidate_task_mode,
+        multiply_mode,
+    ) in enumerate(
+        maybe_tqdm(
+            itertools.product(
+                grids["sim_variants"],
+                grids["local_variant"],
+                candidate_topk_values,
+                rerank_topk_values,
+                grids["alpha"],
+                grids["beta_local"],
+                grids["gate_quantile"],
+                grids["apply_scope"],
+                grids["candidate_task_mode"],
+                grids["multiply_mode"],
+            ),
+            total=loop_total,
+            desc="gated_expert_local",
+            enabled=show_progress,
+        ),
+        start=1,
     ):
+        progress_log(show_progress, idx, loop_total, "gated_expert_local")
         gate_threshold = float(np.quantile(top1_class_gap, gate_q))
         pred = method_class_bonus_expert_local(
             shared_logits=shared_logits,
@@ -1070,7 +1278,7 @@ def run_sweep(
             multiply_mode=multiply_mode,
         )
 
-    for sim_name, candidate_topk, rerank_topk, alpha, kappa, gate_q, apply_scope, candidate_task_mode in itertools.product(
+    loop_total = product_total(
         grids["sim_variants"],
         candidate_topk_values,
         rerank_topk_values,
@@ -1079,7 +1287,26 @@ def run_sweep(
         grids["gate_quantile"],
         grids["apply_scope"],
         grids["candidate_task_mode"],
+    )
+    for idx, (sim_name, candidate_topk, rerank_topk, alpha, kappa, gate_q, apply_scope, candidate_task_mode) in enumerate(
+        maybe_tqdm(
+            itertools.product(
+                grids["sim_variants"],
+                candidate_topk_values,
+                rerank_topk_values,
+                grids["alpha"],
+                grids["kappa"],
+                grids["gate_quantile"],
+                grids["apply_scope"],
+                grids["candidate_task_mode"],
+            ),
+            total=loop_total,
+            desc="adaptive_alpha",
+            enabled=show_progress,
+        ),
+        start=1,
     ):
+        progress_log(show_progress, idx, loop_total, "adaptive_alpha")
         tau = float(np.quantile(top1_task_gap, gate_q))
         pred = method_class_bonus_adaptive_alpha(
             shared_logits=shared_logits,
@@ -1180,7 +1407,14 @@ def main() -> None:
     )
 
     output_dir, cache_file = cache_paths(args.output_dir, args.cache_name)
-    cache = extract_or_load_logits(learner, loader, args.force_recache, cache_file, args.base_cache)
+    cache = extract_or_load_logits(
+        learner,
+        loader,
+        args.force_recache,
+        cache_file,
+        args.base_cache,
+        args.progress,
+    )
 
     class_to_task = build_class_to_task(cache["task_starts"], cache["task_ends"])
     metrics = precompute_metrics(
@@ -1217,6 +1451,7 @@ def main() -> None:
         preset=args.grid_preset,
         output_dir=output_dir,
         max_shared_topk=args.max_shared_topk,
+        show_progress=args.progress,
     )
 
 
