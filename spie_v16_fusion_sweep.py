@@ -29,6 +29,7 @@ import csv
 import itertools
 import json
 import math
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
 
@@ -226,26 +227,66 @@ def cache_paths(output_dir: str, cache_name: str) -> Tuple[Path, Path, Path]:
     return out_dir, out_dir / cache_name, out_dir / "oracle_summary.json"
 
 
+def build_cache_metadata(
+    config_path: str,
+    checkpoint_path: str,
+    norm_args: Dict[str, Any],
+    learner,
+) -> Dict[str, Any]:
+    checkpoint_stat = os.stat(checkpoint_path)
+    return {
+        "cache_version": 2,
+        "config_path": str(Path(config_path).resolve()),
+        "checkpoint_path": str(Path(checkpoint_path).resolve()),
+        "checkpoint_size": int(checkpoint_stat.st_size),
+        "checkpoint_mtime_ns": int(checkpoint_stat.st_mtime_ns),
+        "dataset": str(norm_args["dataset"]),
+        "seed": int(norm_args["seed"]),
+        "init_cls": int(norm_args["init_cls"]),
+        "increment": int(norm_args["increment"]),
+        "total_classes": int(learner._total_classes),
+        "num_tasks": int(len(learner.task_class_ranges)),
+    }
+
+
+def _read_cache_metadata(data: np.lib.npyio.NpzFile) -> Dict[str, Any]:
+    if "cache_metadata" not in data.files:
+        return {}
+    raw = data["cache_metadata"]
+    if isinstance(raw, np.ndarray) and raw.shape == ():
+        raw = raw.item()
+    if not isinstance(raw, dict):
+        return {}
+    return raw
+
+
 def extract_or_load_logits(
     learner,
     loader: DataLoader,
     force_recache: bool,
     cache_file: Path,
+    cache_metadata: Dict[str, Any],
 ) -> Dict[str, Any]:
     if cache_file.exists() and not force_recache:
-        print(f"[info] Loading cache: {cache_file}")
         data = np.load(cache_file, allow_pickle=True)
-        num_tasks = int(data["num_tasks"])
-        expert_logits = [data[f"expert_logits_{i}"] for i in range(num_tasks)]
-        return {
-            "shared_logits": data["shared_logits"],
-            "targets": data["targets"],
-            "task_starts": data["task_starts"],
-            "task_ends": data["task_ends"],
-            "expert_logits": expert_logits,
-            "num_tasks": num_tasks,
-            "total_classes": int(data["total_classes"]),
-        }
+        stored_metadata = _read_cache_metadata(data)
+        if stored_metadata != cache_metadata:
+            print(f"[warn] Ignoring stale cache: {cache_file}")
+            print(f"[warn] Cached metadata: {stored_metadata if stored_metadata else '<missing>'}")
+            print(f"[warn] Expected metadata: {cache_metadata}")
+        else:
+            print(f"[info] Loading cache: {cache_file}")
+            num_tasks = int(data["num_tasks"])
+            expert_logits = [data[f"expert_logits_{i}"] for i in range(num_tasks)]
+            return {
+                "shared_logits": data["shared_logits"],
+                "targets": data["targets"],
+                "task_starts": data["task_starts"],
+                "task_ends": data["task_ends"],
+                "expert_logits": expert_logits,
+                "num_tasks": num_tasks,
+                "total_classes": int(data["total_classes"]),
+            }
 
     print("[info] Extracting shared/expert logits from the test set...")
     learner._network.eval()
@@ -279,6 +320,7 @@ def extract_or_load_logits(
         "task_ends": task_ends,
         "num_tasks": np.int64(len(task_ids)),
         "total_classes": np.int64(learner._total_classes),
+        "cache_metadata": np.array(cache_metadata, dtype=object),
     }
     for task_id, arr in enumerate(expert_logits_np):
         payload[f"expert_logits_{task_id}"] = arr
@@ -877,7 +919,8 @@ def main() -> None:
     )
 
     output_dir, cache_file, _ = cache_paths(args.output_dir, args.cache_name)
-    cache = extract_or_load_logits(learner, loader, args.force_recache, cache_file)
+    cache_metadata = build_cache_metadata(args.config, args.checkpoint, norm_args, learner)
+    cache = extract_or_load_logits(learner, loader, args.force_recache, cache_file, cache_metadata)
 
     class_to_task = build_class_to_task(cache["task_starts"], cache["task_ends"])
     metrics = precompute_metrics(
