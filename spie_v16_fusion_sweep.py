@@ -137,7 +137,10 @@ def normalize_args(cfg: Dict[str, Any], device_str: str, batch_size_override: in
     if "memory_per_class" not in args:
         args["memory_per_class"] = None
 
-    requested = torch.device(device_str)
+    normalized_device = str(device_str).strip()
+    if normalized_device.isdigit():
+        normalized_device = f"cuda:{normalized_device}"
+    requested = torch.device(normalized_device)
     if requested.type == "cuda" and not torch.cuda.is_available():
         print("[warn] CUDA requested but unavailable. Falling back to CPU.")
         requested = torch.device("cpu")
@@ -832,6 +835,8 @@ def main() -> None:
         norm_args["increment"],
         norm_args,
     )
+    norm_args["nb_classes"] = data_manager.nb_classes
+    norm_args["nb_tasks"] = data_manager.nb_tasks
     learner = factory.get_model(norm_args["model_name"], norm_args)
     rebuild_spie_v16_to_checkpoint(learner, data_manager, checkpoint)
     learner._network.to(norm_args["device"][0])
