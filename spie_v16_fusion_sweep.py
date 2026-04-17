@@ -165,6 +165,7 @@ def rebuild_spie_v16_to_checkpoint(learner, data_manager: DataManager, checkpoin
     last_task = int(checkpoint["tasks"])
     seen_classes = 0
     learner.task_class_ranges = []
+    backbone = learner._backbone_module()
 
     for task_id in range(last_task + 1):
         task_size = int(data_manager.get_task_size(task_id))
@@ -172,6 +173,14 @@ def rebuild_spie_v16_to_checkpoint(learner, data_manager: DataManager, checkpoin
         learner._network.update_fc(task_size)
         learner._network.append_expert_head(task_size)
         seen_classes += task_size
+
+        # Mirror the training lifecycle for expert task modules:
+        # after each task finishes, the current expert adapter/tokens are frozen
+        # into adapter_list/expert_token_list; before the next task starts, a new
+        # current expert module is reset.
+        backbone.adapter_update()
+        if task_id < last_task:
+            backbone.reset_task_modules()
 
     learner._cur_task = last_task
     learner._total_classes = int(checkpoint.get("total_classes", seen_classes))
