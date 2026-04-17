@@ -13,6 +13,7 @@ from backbone.linears import TunaLinear
 from models.base import BaseLearner
 from models.tuna import AngularPenaltySMLoss
 from utils.inc_net import get_backbone
+from utils.lion import Lion
 from utils.toolkit import tensor2numpy
 
 num_workers = 8
@@ -260,12 +261,16 @@ class Learner(BaseLearner):
             self._network.backbone = self._backbone_module()
 
     def _make_optimizer(self, network_params):
-        if self.args["optimizer"] == "sgd":
+        optimizer_name = str(self.args["optimizer"]).lower()
+        if optimizer_name == "sgd":
             return optim.SGD(network_params, momentum=0.9)
-        if self.args["optimizer"] == "adam":
+        if optimizer_name == "adam":
             return optim.Adam(network_params)
-        if self.args["optimizer"] == "adamw":
+        if optimizer_name == "adamw":
             return optim.AdamW(network_params)
+        if optimizer_name in {"lion", "evolved_sign_momentum", "esm"}:
+            lion_betas = tuple(self.args.get("lion_betas", (0.9, 0.99)))
+            return Lion(network_params, betas=lion_betas)
         raise ValueError(f"Unsupported optimizer: {self.args['optimizer']}")
 
     def _get_scheduler_for_epochs(self, optimizer, epochs):
@@ -955,7 +960,7 @@ class Learner(BaseLearner):
             p.requires_grad = True
 
         network_params = [{"params": classifier.parameters(), "lr": lr, "weight_decay": self.weight_decay}]
-        optimizer = optim.SGD(network_params, lr=lr, momentum=0.9, weight_decay=5e-4)
+        optimizer = self._make_optimizer(network_params)
         scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer=optimizer, T_max=max(run_epochs, 1))
 
         prog_bar = tqdm(range(run_epochs))
