@@ -792,9 +792,10 @@ def run_sweep(
     rows_sorted = sorted(rows, key=lambda x: (-x["top1"], x["method"]))
     all_csv = output_dir / "fusion_sweep_all.csv"
     best_csv = output_dir / "fusion_sweep_best_per_method.csv"
+    all_fieldnames = sorted({key for row in rows_sorted for key in row.keys()})
 
     with open(all_csv, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=sorted(rows_sorted[0].keys()))
+        writer = csv.DictWriter(f, fieldnames=all_fieldnames)
         writer.writeheader()
         for row in rows_sorted:
             writer.writerow(row)
@@ -808,7 +809,7 @@ def run_sweep(
         best_rows.append(row)
 
     with open(best_csv, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=sorted(best_rows[0].keys()))
+        writer = csv.DictWriter(f, fieldnames=all_fieldnames)
         writer.writeheader()
         for row in best_rows:
             writer.writerow(row)
