@@ -39,6 +39,7 @@ def scan_checkpoints(ckpt_dir: Path) -> Dict[int, Path]:
 def build_model_for_checkpoint(args: Dict[str, Any], checkpoint: Dict[str, Any], data_manager: DataManager):
     model = factory.get_model(args["model_name"], args)
     target_task = int(checkpoint["tasks"])
+    backbone = model._backbone_module() if hasattr(model, "_backbone_module") else None
 
     for task_id in range(target_task + 1):
         model._cur_task += 1
@@ -48,8 +49,10 @@ def build_model_for_checkpoint(args: Dict[str, Any], checkpoint: Dict[str, Any],
         model._network.update_fc(current_task_size)
         if hasattr(model._network, "append_expert_head"):
             model._network.append_expert_head(current_task_size)
-        if hasattr(model, "_should_reset_task_modules") and model._should_reset_task_modules():
-            model._backbone_module().reset_task_modules()
+        if backbone is not None and hasattr(model, "_should_reset_task_modules") and model._should_reset_task_modules():
+            backbone.reset_task_modules()
+            if hasattr(backbone, "adapter_update"):
+                backbone.adapter_update()
         model._known_classes = model._total_classes
 
     state_dict = checkpoint["model_state_dict"]
@@ -80,6 +83,37 @@ def build_task_loader(data_manager: DataManager, start: int, end: int, split: st
 
 
 @torch.no_grad()
+def collect_expert_logits(model, inputs: torch.Tensor, task_ids: List[int]) -> Dict[int, torch.Tensor]:
+    if hasattr(model, "_collect_expert_logits"):
+        return model._collect_expert_logits(inputs, task_ids)
+
+    if not hasattr(model, "_backbone_module") or not hasattr(model._network, "get_expert_head"):
+        raise AttributeError(
+            f"Model '{model.args['model_name']}' does not implement `_collect_expert_logits`, "
+            "and no generic expert-head fallback is available."
+        )
+
+    backbone = model._backbone_module()
+    task_ids = list(task_ids)
+    if len(task_ids) > 1 and hasattr(backbone, "forward_multi_expert_features"):
+        outputs = backbone.forward_multi_expert_features(inputs, task_ids)
+        expert_feature_map = {
+            task_id: outputs["expert_features"][local_idx]
+            for local_idx, task_id in enumerate(task_ids)
+        }
+    else:
+        expert_feature_map = {
+            task_id: model._network.backbone(inputs, adapter_id=task_id, train=False)["expert_features"]
+            for task_id in task_ids
+        }
+
+    return {
+        task_id: model._network.get_expert_head(task_id)(expert_feature_map[task_id])["logits"]
+        for task_id in task_ids
+    }
+
+
+@torch.no_grad()
 def eval_expert_on_task(model, loader: DataLoader, task_id: int) -> Dict[str, Any]:
     start, _ = model.task_class_ranges[task_id]
     total = 0
@@ -92,7 +126,7 @@ def eval_expert_on_task(model, loader: DataLoader, task_id: int) -> Dict[str, An
     for _, inputs, targets in loader:
         inputs = inputs.to(model._device)
         targets = targets.to(model._device)
-        expert_logits_map = model._collect_expert_logits(inputs, [task_id])
+        expert_logits_map = collect_expert_logits(model, inputs, [task_id])
         local_logits = expert_logits_map[task_id]
         local_probs = F.softmax(local_logits, dim=1)
         local_order = torch.argsort(local_logits, dim=1, descending=True)
@@ -310,8 +344,6 @@ def main() -> None:
         checkpoint = torch.load(ckpt_path, map_location="cpu")
         model = build_model_for_checkpoint(args, checkpoint, data_manager)
 
-        if not hasattr(model, "_collect_expert_logits"):
-            raise AttributeError(f"Model '{args['model_name']}' does not implement `_collect_expert_logits`.")
         if not hasattr(model, "_shared_cls_logits"):
             raise AttributeError(f"Model '{args['model_name']}' does not implement `_shared_cls_logits`.")
 
