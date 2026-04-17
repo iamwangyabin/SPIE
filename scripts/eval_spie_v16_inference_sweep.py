@@ -426,7 +426,10 @@ def build_model_for_checkpoint(args: Dict[str, Any], checkpoint: Dict[str, Any],
         model._network.update_fc(current_task_size)
         model._network.append_expert_head(current_task_size)
         if model._should_reset_task_modules():
-            model._backbone_module().reset_task_modules()
+            backbone = model._backbone_module()
+            backbone.reset_task_modules()
+            if hasattr(backbone, "adapter_update"):
+                backbone.adapter_update()
         model._known_classes = model._total_classes
 
     model._network.load_state_dict(checkpoint["model_state_dict"], strict=True)
