@@ -890,56 +890,26 @@ class Learner(BaseLearner):
 
         for _, (_, inputs, targets) in enumerate(loader):
             inputs = inputs.to(self._device)
+            targets = targets.to(self._device)
 
             with torch.no_grad():
-                shared_logits = self._shared_cls_logits(inputs)
-                candidate_topk = min(self.energy_topk, shared_logits.shape[1])
-                shared_topk = torch.topk(shared_logits, k=candidate_topk, dim=1, largest=True, sorted=True).indices
-                candidate_tasks, unique_task_ids = self._select_candidate_tasks(shared_topk)
+                gt_task_ids = [self._class_to_task_id(int(target.item())) for target in targets]
+                unique_task_ids = sorted(set(gt_task_ids))
                 expert_logits_map = self._collect_expert_logits(inputs, unique_task_ids)
-                shared_task_max_map = {}
-                energy_score_map = {}
-
-                for task_id in unique_task_ids:
-                    start_idx, end_idx = self.task_class_ranges[task_id]
-                    shared_slice = shared_logits[:, start_idx:end_idx]
-                    shared_task_max_map[task_id] = torch.max(shared_slice, dim=1).values
-
-                    raw_energy = self._energy_from_logits(expert_logits_map[task_id])
-                    energy_mean_in, energy_std_in = self._network.get_expert_energy_stats(task_id)
-                    energy_score_map[task_id] = (
-                        raw_energy - energy_mean_in.to(device=raw_energy.device, dtype=raw_energy.dtype)
-                    ) / (energy_std_in.to(device=raw_energy.device, dtype=raw_energy.dtype) + 1e-6)
 
                 predicts = torch.full(
-                    (shared_logits.shape[0], self.topk),
+                    (targets.shape[0], self.topk),
                     -1,
-                    device=shared_logits.device,
+                    device=inputs.device,
                     dtype=torch.long,
                 )
 
-                for sample_idx, row_tasks in enumerate(candidate_tasks):
-                    if not row_tasks:
-                        predicts[sample_idx] = self._predict_topk(shared_logits[sample_idx : sample_idx + 1])[0]
-                        continue
-
-                    shared_task_scores = torch.stack(
-                        [shared_task_max_map[task_id][sample_idx] for task_id in row_tasks],
-                        dim=0,
-                    )
-                    shared_task_scores = self._zscore_tensor(shared_task_scores, dim=0)
-                    energy_scores = torch.stack(
-                        [energy_score_map[task_id][sample_idx] for task_id in row_tasks],
-                        dim=0,
-                    )
-                    task_scores = 0.5 * shared_task_scores + 0.5 * energy_scores
-                    selected_task = row_tasks[int(torch.argmax(task_scores).item())]
-
-                    start_idx, end_idx = self.task_class_ranges[selected_task]
-                    shared_slice = self._zscore_tensor(shared_logits[sample_idx, start_idx:end_idx], dim=0)
-                    expert_slice = self._zscore_tensor(expert_logits_map[selected_task][sample_idx], dim=0)
-                    final_scores = 0.5 * shared_slice + 0.5 * expert_slice
-                    final_order = torch.argsort(final_scores, descending=True)
+                # NME for SPiE v16 is defined as oracle expert-local classification:
+                # use the ground-truth task's expert and rank classes only within that expert.
+                for sample_idx, task_id in enumerate(gt_task_ids):
+                    start_idx, _ = self.task_class_ranges[task_id]
+                    expert_slice = expert_logits_map[task_id][sample_idx]
+                    final_order = torch.argsort(expert_slice, descending=True)
                     local_topk = min(self.topk, final_order.numel())
                     predicts[sample_idx, :local_topk] = final_order[:local_topk] + start_idx
 
