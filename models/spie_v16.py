@@ -13,7 +13,6 @@ from backbone.linears import TunaLinear
 from models.base import BaseLearner
 from models.tuna import AngularPenaltySMLoss
 from utils.inc_net import get_backbone
-from utils.lion import Lion
 from utils.toolkit import tensor2numpy
 
 num_workers = 8
@@ -170,7 +169,6 @@ class Learner(BaseLearner):
         self.verifier_align_lr = float(args.get("verifier_align_lr", self.shared_cls_lr))
         self.verifier_align_weight = float(args.get("verifier_align_weight", 0.25))
         self.verifier_eps = float(args.get("verifier_eps", 1e-8))
-        self.optimizer_grad_clip = float(args.get("optimizer_grad_clip", 0.0))
 
         for name, param in self._network.backbone.named_parameters():
             param.requires_grad = (
@@ -262,16 +260,12 @@ class Learner(BaseLearner):
             self._network.backbone = self._backbone_module()
 
     def _make_optimizer(self, network_params):
-        optimizer_name = str(self.args["optimizer"]).lower()
-        if optimizer_name == "sgd":
+        if self.args["optimizer"] == "sgd":
             return optim.SGD(network_params, momentum=0.9)
-        if optimizer_name == "adam":
+        if self.args["optimizer"] == "adam":
             return optim.Adam(network_params)
-        if optimizer_name == "adamw":
+        if self.args["optimizer"] == "adamw":
             return optim.AdamW(network_params)
-        if optimizer_name in {"lion", "evolved_sign_momentum", "esm"}:
-            lion_betas = tuple(self.args.get("lion_betas", (0.9, 0.99)))
-            return Lion(network_params, betas=lion_betas)
         raise ValueError(f"Unsupported optimizer: {self.args['optimizer']}")
 
     def _get_scheduler_for_epochs(self, optimizer, epochs):
@@ -297,14 +291,6 @@ class Learner(BaseLearner):
 
     def _set_expert_head_requires_grad(self, task_id, requires_grad):
         self._network.get_expert_head(task_id).requires_grad_(requires_grad)
-
-    def _optimizer_step(self, optimizer):
-        if self.optimizer_grad_clip > 0:
-            params = []
-            for group in optimizer.param_groups:
-                params.extend(group["params"])
-            nn.utils.clip_grad_norm_(params, self.optimizer_grad_clip)
-        optimizer.step()
 
     def _shared_branch_optimizer(self, lr):
         backbone = self._backbone_module()
@@ -532,7 +518,7 @@ class Learner(BaseLearner):
                 loss = loss_cos(logits[:, self._known_classes : self._total_classes], targets - self._known_classes)
                 optimizer.zero_grad()
                 loss.backward()
-                self._optimizer_step(optimizer)
+                optimizer.step()
 
                 losses += loss.item()
                 _, preds = torch.max(logits[:, self._known_classes : self._total_classes], dim=1)
@@ -609,7 +595,7 @@ class Learner(BaseLearner):
 
                 optimizer.zero_grad()
                 loss.backward()
-                self._optimizer_step(optimizer)
+                optimizer.step()
                 running_energy_stats = self._update_running_energy_stats(running_energy_stats, energy_scores)
 
                 losses += loss.item()
@@ -709,7 +695,7 @@ class Learner(BaseLearner):
 
                 optimizer.zero_grad()
                 loss.backward()
-                self._optimizer_step(optimizer)
+                optimizer.step()
 
                 losses += loss.item()
                 preds = torch.argmax(shared_task_logits, dim=1) + self._known_classes
@@ -969,7 +955,7 @@ class Learner(BaseLearner):
             p.requires_grad = True
 
         network_params = [{"params": classifier.parameters(), "lr": lr, "weight_decay": self.weight_decay}]
-        optimizer = self._make_optimizer(network_params)
+        optimizer = optim.SGD(network_params, lr=lr, momentum=0.9, weight_decay=5e-4)
         scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer=optimizer, T_max=max(run_epochs, 1))
 
         prog_bar = tqdm(range(run_epochs))
@@ -1017,7 +1003,7 @@ class Learner(BaseLearner):
 
                 optimizer.zero_grad()
                 loss.backward()
-                self._optimizer_step(optimizer)
+                optimizer.step()
                 losses += loss.item()
 
             scheduler.step()
