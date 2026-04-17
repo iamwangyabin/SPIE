@@ -75,7 +75,7 @@ class SPIEV16Net(nn.Module):
     def append_expert_head(self, nb_classes):
         for head in self.expert_heads:
             head.requires_grad_(False)
-        head = TaskLocalLinearHead(self.expert_feature_dim, nb_classes).to(self._device)
+        head = self.generate_fc(self.expert_feature_dim, nb_classes).to(self._device)
         self.expert_heads.append(head)
         self.expert_energy_mean_in = torch.cat((self.expert_energy_mean_in, self.expert_energy_mean_in.new_zeros(1)))
         self.expert_energy_std_in = torch.cat((self.expert_energy_std_in, self.expert_energy_std_in.new_ones(1)))
@@ -193,8 +193,8 @@ class Learner(BaseLearner):
         )
         logging.info(
             (
-                "SPiE v16 expert energy: task0 epochs=%s lr=%s, incremental epochs=%s lr=%s, "
-                "energy_topk=%s, align_epochs=%s, align_weight=%s."
+                "SPiE v16 expert branch: task0 epochs=%s lr=%s, incremental epochs=%s lr=%s, "
+                "head=shared_tunalinear, loss=cosface, energy_topk=%s, align_epochs=%s, align_weight=%s."
             ),
             self.task0_expert_epochs,
             self.task0_expert_lr,
@@ -565,6 +565,7 @@ class Learner(BaseLearner):
         scheduler = self._get_scheduler_for_epochs(optimizer, epochs)
         prog_bar = tqdm(range(epochs))
         expert_head = self._network.get_expert_head(self._cur_task)
+        loss_cos = AngularPenaltySMLoss(loss_type="cosface", eps=1e-7, s=self.args["scale"], m=self.args["m"])
         running_energy_stats = self._init_running_energy_stats()
         for _, epoch in enumerate(prog_bar):
             self._network.backbone.train()
@@ -582,7 +583,7 @@ class Learner(BaseLearner):
                 expert_out = expert_head(expert_features)
                 logits = expert_out["logits"]
                 energy_scores = self._energy_from_logits(logits)
-                ce_loss = F.cross_entropy(logits, local_targets)
+                ce_loss = loss_cos(logits, local_targets)
                 loss = ce_loss
 
                 optimizer.zero_grad()
