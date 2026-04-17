@@ -767,6 +767,123 @@ class Learner(BaseLearner):
             predicts = torch.cat([predicts, pad], dim=1)
         return predicts
 
+    def _centered_cosine_batch_np(self, shared_slices, expert_slices):
+        shared_centered = shared_slices - shared_slices.mean(axis=1, keepdims=True)
+        expert_centered = expert_slices - expert_slices.mean(axis=1, keepdims=True)
+        numerator = np.sum(shared_centered * expert_centered, axis=1)
+        denominator = np.linalg.norm(shared_centered, axis=1) * np.linalg.norm(expert_centered, axis=1)
+        return numerator / np.clip(denominator, a_min=1e-12, a_max=None)
+
+    def _zscore_rows_np(self, values):
+        mean = values.mean(axis=1, keepdims=True)
+        std = values.std(axis=1, keepdims=True)
+        return (values - mean) / np.clip(std, a_min=1e-12, a_max=None)
+
+    def _build_class_to_task_np(self):
+        class_to_task = np.full((self._total_classes,), -1, dtype=np.int64)
+        for task_id, (start_idx, end_idx) in enumerate(self.task_class_ranges):
+            class_to_task[start_idx:end_idx] = task_id
+        return class_to_task
+
+    def _candidate_tasks_from_topk_np(self, shared_topk, class_to_task, topk_width):
+        candidate_tasks = []
+        width = min(topk_width, shared_topk.shape[1])
+        for row in shared_topk[:, :width]:
+            row_tasks = []
+            seen = set()
+            for class_idx in row.tolist():
+                task_id = int(class_to_task[class_idx])
+                if task_id not in seen:
+                    seen.add(task_id)
+                    row_tasks.append(task_id)
+            candidate_tasks.append(np.array(row_tasks, dtype=np.int64))
+        return candidate_tasks
+
+    def _filter_candidate_tasks_np(self, candidate_tasks, block_row, mode):
+        if candidate_tasks.size <= 2:
+            return candidate_tasks
+        order = candidate_tasks[np.argsort(-block_row[candidate_tasks])]
+        if mode == "top2_tasks_only":
+            return order[:2]
+        if mode == "top3_tasks_only":
+            return order[:3]
+        return candidate_tasks
+
+    def _fixed_fusion_eval_np(self, shared_logits, expert_logits_by_task):
+        params = {
+            "alpha": 0.2,
+            "beta_local": 0.02,
+            "candidate_topk": 3,
+            "candidate_task_mode": "top2_tasks_only",
+            "gate_quantile": 0.1,
+            "local_variant": "zscore",
+            "multiply_mode": "additive",
+            "apply_scope": "all_rerank_classes",
+            "sim_variant": "center_cos",
+            "rerank_topk": 3,
+        }
+
+        num_samples = shared_logits.shape[0]
+        num_tasks = len(self.task_class_ranges)
+        class_to_task = self._build_class_to_task_np()
+        task_starts = np.array([start for start, _ in self.task_class_ranges], dtype=np.int64)
+        task_ends = np.array([end for _, end in self.task_class_ranges], dtype=np.int64)
+
+        max_topk = min(max(self.topk, params["candidate_topk"], params["rerank_topk"]), shared_logits.shape[1])
+        shared_topk = np.argsort(-shared_logits, axis=1)[:, :max_topk]
+        predicts = np.full((num_samples, self.topk), -1, dtype=np.int64)
+        predicts[:, :max_topk] = shared_topk[:, :max_topk]
+
+        if shared_logits.shape[1] <= 1:
+            return predicts
+
+        top1_class_gap = shared_logits[np.arange(num_samples), shared_topk[:, 0]] - shared_logits[np.arange(num_samples), shared_topk[:, 1]]
+        gate_threshold = float(np.quantile(top1_class_gap, params["gate_quantile"]))
+
+        block_scores = np.zeros((num_samples, num_tasks), dtype=np.float32)
+        task_metric = np.zeros((num_samples, num_tasks), dtype=np.float32)
+        expert_local_metric = []
+        for task_id, (start_idx, end_idx) in enumerate(zip(task_starts.tolist(), task_ends.tolist())):
+            shared_slice = shared_logits[:, start_idx:end_idx]
+            expert_slice = expert_logits_by_task[task_id]
+            max_shared = np.max(shared_slice, axis=1, keepdims=True)
+            block_scores[:, task_id] = np.squeeze(
+                max_shared + np.log(np.sum(np.exp(shared_slice - max_shared), axis=1, keepdims=True) + 1e-12),
+                axis=1,
+            )
+            task_metric[:, task_id] = self._centered_cosine_batch_np(shared_slice, expert_slice).astype(np.float32)
+            expert_local_metric.append(self._zscore_rows_np(expert_slice).astype(np.float32))
+
+        candidate_tasks_by_k = self._candidate_tasks_from_topk_np(shared_topk, class_to_task, params["candidate_topk"])
+        rerank_width = min(params["rerank_topk"], shared_topk.shape[1])
+
+        for sample_idx in range(num_samples):
+            if float(top1_class_gap[sample_idx]) > gate_threshold:
+                continue
+
+            candidate_classes = shared_topk[sample_idx, :rerank_width]
+            candidate_tasks = self._filter_candidate_tasks_np(
+                candidate_tasks_by_k[sample_idx], block_scores[sample_idx], params["candidate_task_mode"]
+            )
+            if candidate_tasks.size == 0:
+                continue
+
+            scores = shared_logits[sample_idx, candidate_classes].copy()
+            candidate_task_set = set(candidate_tasks.tolist())
+            for local_rank, class_idx in enumerate(candidate_classes.tolist()):
+                task_id = int(class_to_task[class_idx])
+                if task_id not in candidate_task_set:
+                    continue
+                local_idx = int(class_idx - task_starts[task_id])
+                task_bonus = float(task_metric[sample_idx, task_id])
+                local_bonus = float(expert_local_metric[task_id][sample_idx, local_idx])
+                scores[local_rank] += params["alpha"] * task_bonus + params["beta_local"] * local_bonus
+
+            reranked_classes = candidate_classes[np.argsort(-scores)]
+            predicts[sample_idx, :rerank_width] = reranked_classes
+
+        return predicts
+
     def _select_candidate_tasks(self, topk_indices):
         candidate_tasks = []
         unique_task_ids = []
@@ -873,37 +990,33 @@ class Learner(BaseLearner):
         del class_means
 
         self._network.eval()
-        y_pred, y_true = [], []
+        all_shared_logits, all_targets = [], []
+        num_tasks = len(self.task_class_ranges)
+        expert_logits_chunks = [[] for _ in range(num_tasks)]
 
         for _, (_, inputs, targets) in enumerate(loader):
             inputs = inputs.to(self._device)
-            targets = targets.to(self._device)
 
             with torch.no_grad():
-                gt_task_ids = [self._class_to_task_id(int(target.item())) for target in targets]
-                unique_task_ids = sorted(set(gt_task_ids))
-                expert_logits_map = self._collect_expert_logits(inputs, unique_task_ids)
+                shared_logits = self._shared_cls_logits(inputs)
+                expert_logits_map = self._collect_expert_logits(inputs, list(range(num_tasks)))
 
-                predicts = torch.full(
-                    (targets.shape[0], self.topk),
-                    -1,
-                    device=inputs.device,
-                    dtype=torch.long,
-                )
+            all_shared_logits.append(shared_logits.cpu().numpy().astype(np.float32))
+            all_targets.append(targets.numpy())
+            for task_id in range(num_tasks):
+                expert_logits_chunks[task_id].append(expert_logits_map[task_id].cpu().numpy().astype(np.float32))
 
-                # NME for SPiE v16 is defined as oracle expert-local classification:
-                # use the ground-truth task's expert and rank classes only within that expert.
-                for sample_idx, task_id in enumerate(gt_task_ids):
-                    start_idx, _ = self.task_class_ranges[task_id]
-                    expert_slice = expert_logits_map[task_id][sample_idx]
-                    final_order = torch.argsort(expert_slice, descending=True)
-                    local_topk = min(self.topk, final_order.numel())
-                    predicts[sample_idx, :local_topk] = final_order[:local_topk] + start_idx
+        shared_logits_np = np.concatenate(all_shared_logits, axis=0)
+        y_true = np.concatenate(all_targets, axis=0)
+        expert_logits_by_task = [np.concatenate(task_chunks, axis=0) for task_chunks in expert_logits_chunks]
 
-            y_pred.append(predicts.cpu().numpy())
-            y_true.append(targets.cpu().numpy())
-
-        return np.concatenate(y_pred), np.concatenate(y_true)
+        logging.info(
+            "SPiE v16 eval 'nme' branch uses fixed fusion: alpha=0.2 beta_local=0.02 candidate_topk=3 "
+            "candidate_task_mode=top2_tasks_only gate_quantile=0.1 local_variant=zscore "
+            "multiply_mode=additive apply_scope=all_rerank_classes sim_variant=center_cos rerank_topk=3."
+        )
+        y_pred = self._fixed_fusion_eval_np(shared_logits_np, expert_logits_by_task)
+        return y_pred, y_true
 
     @torch.no_grad()
     def _compute_shared_cls_mean(self, model):
