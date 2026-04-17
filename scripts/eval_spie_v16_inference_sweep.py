@@ -111,6 +111,29 @@ class SweepEvaluator:
         self.max_candidate_width = max(8, topk, int(getattr(model, "energy_topk", topk)))
 
     @torch.no_grad()
+    def _select_candidate_tasks_for_indices(self, topk_indices: torch.Tensor):
+        candidate_tasks = []
+        unique_task_ids = []
+        seen_global = set()
+
+        for row in topk_indices.tolist():
+            row_tasks = []
+            row_seen = set()
+            for class_idx in row:
+                if class_idx < 0:
+                    continue
+                task_id = self.model._class_to_task_id(int(class_idx))
+                if task_id not in row_seen:
+                    row_seen.add(task_id)
+                    row_tasks.append(task_id)
+                if task_id not in seen_global:
+                    seen_global.add(task_id)
+                    unique_task_ids.append(task_id)
+            candidate_tasks.append(row_tasks)
+
+        return candidate_tasks, unique_task_ids
+
+    @torch.no_grad()
     def _predict_from_scores(self, scores: torch.Tensor) -> torch.Tensor:
         k = min(self.topk, scores.shape[1])
         pred = torch.topk(scores, k=k, dim=1, largest=True, sorted=True).indices
@@ -146,9 +169,7 @@ class SweepEvaluator:
         shared_logits = model._shared_cls_logits(inputs)
         candidate_width = min(self.max_candidate_width, shared_logits.shape[1])
         topcand = torch.topk(shared_logits, k=candidate_width, dim=1, largest=True, sorted=True).indices
-        gate_width = min(model.energy_topk, topcand.shape[1])
-        gate_topk = topcand[:, :gate_width]
-        candidate_tasks, unique_task_ids = model._select_candidate_tasks(gate_topk)
+        candidate_tasks, unique_task_ids = self._select_candidate_tasks_for_indices(topcand)
         expert_logits_map = model._collect_expert_logits(inputs, unique_task_ids)
 
         shared_task_max_map = {}
