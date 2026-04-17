@@ -128,6 +128,16 @@ def load_json(path: str) -> Dict[str, Any]:
         return json.load(f)
 
 
+def _normalize_scalar_config_value(args: Dict[str, Any], key: str) -> None:
+    value = args.get(key)
+    if isinstance(value, (list, tuple)):
+        if len(value) != 1:
+            raise ValueError(
+                f"Expected config field '{key}' to be a scalar or a single-item list/tuple, got {value!r}."
+            )
+        args[key] = value[0]
+
+
 def normalize_args(cfg: Dict[str, Any], device_str: str, batch_size_override: int | None) -> Dict[str, Any]:
     args = dict(cfg)
     if "memory_size" not in args:
@@ -136,6 +146,13 @@ def normalize_args(cfg: Dict[str, Any], device_str: str, batch_size_override: in
         args["fixed_memory"] = False
     if "memory_per_class" not in args:
         args["memory_per_class"] = None
+
+    # Training expands sweep-relevant scalar fields like seed/device from config
+    # lists before constructing the DataManager. Mirror that here so the class
+    # order used for evaluation matches the checkpoint's training run.
+    _normalize_scalar_config_value(args, "seed")
+    _normalize_scalar_config_value(args, "init_cls")
+    _normalize_scalar_config_value(args, "increment")
 
     normalized_device = str(device_str).strip()
     if normalized_device.isdigit():
