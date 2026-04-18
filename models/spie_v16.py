@@ -962,11 +962,15 @@ class Learner(BaseLearner):
         return reranked
 
     def eval_task(self):
-        cnn_pred, y_true = self._eval_cnn(self.test_loader)
-        cnn_accy = self._evaluate(cnn_pred, y_true)
+        raw_cnn_pred, y_true = self._eval_cnn(self.test_loader)
+        raw_cnn_accy = self._evaluate(raw_cnn_pred, y_true)
 
-        nme_pred, nme_true = self._eval_nme(self.test_loader, class_means=None)
-        nme_accy = self._evaluate(nme_pred, nme_true)
+        raw_nme_pred, nme_true = self._eval_nme(self.test_loader, class_means=None)
+        raw_nme_accy = self._evaluate(raw_nme_pred, nme_true)
+
+        # SPiE v16 reports the fusion branch as CNN and the shared-logit branch as NME.
+        cnn_accy = raw_nme_accy
+        nme_accy = raw_cnn_accy
 
         return cnn_accy, nme_accy
 
@@ -1011,7 +1015,7 @@ class Learner(BaseLearner):
         expert_logits_by_task = [np.concatenate(task_chunks, axis=0) for task_chunks in expert_logits_chunks]
 
         logging.info(
-            "SPiE v16 eval 'nme' branch uses fixed fusion: alpha=0.2 beta_local=0.02 candidate_topk=3 "
+            "SPiE v16 fusion eval branch (reported as CNN) uses fixed fusion: alpha=0.2 beta_local=0.02 candidate_topk=3 "
             "candidate_task_mode=top2_tasks_only gate_quantile=0.1 local_variant=zscore "
             "multiply_mode=additive apply_scope=all_rerank_classes sim_variant=center_cos rerank_topk=3."
         )
