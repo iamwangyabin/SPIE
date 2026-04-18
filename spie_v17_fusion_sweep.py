@@ -167,6 +167,22 @@ def zscore_rows_np(x: np.ndarray) -> np.ndarray:
     return (x - mean) / np.clip(std, a_min=EPS, a_max=None)
 
 
+def minmax_rows_np(x: np.ndarray) -> np.ndarray:
+    x_min = x.min(axis=1, keepdims=True)
+    x_max = x.max(axis=1, keepdims=True)
+    return (x - x_min) / np.clip(x_max - x_min, a_min=EPS, a_max=None)
+
+
+def normalize_rows_np(x: np.ndarray, mode: str) -> np.ndarray:
+    if mode == "none":
+        return x
+    if mode == "zscore":
+        return zscore_rows_np(x)
+    if mode == "minmax":
+        return minmax_rows_np(x)
+    raise ValueError(f"Unknown normalize mode: {mode}")
+
+
 def rebuild_spie_v17_to_checkpoint(learner, data_manager: DataManager, checkpoint: Dict[str, Any]) -> None:
     if "tasks" not in checkpoint:
         raise KeyError("Checkpoint is missing 'tasks'. Expected a BaseLearner task_*.pkl checkpoint.")
@@ -466,6 +482,36 @@ def method_task_relation_all_classes(
     return adjusted.argmax(axis=1).astype(np.int64)
 
 
+def method_softmax_scale_then_shared(
+    shared_logits: np.ndarray,
+    metric: np.ndarray,
+    task_starts: np.ndarray,
+    task_ends: np.ndarray,
+    alpha: float,
+    temperature: float,
+    mode: str,
+) -> np.ndarray:
+    weights = softmax_np(metric / max(float(temperature), 1e-6), axis=1)
+    uniform = 1.0 / max(metric.shape[1], 1)
+    adjusted = shared_logits.copy()
+
+    if mode == "mul_centered":
+        task_values = np.clip(1.0 + float(alpha) * (weights - uniform), a_min=0.5, a_max=1.5)
+    elif mode == "mul_softmax":
+        task_values = np.clip(1.0 + float(alpha) * weights, a_min=0.5, a_max=2.0)
+    elif mode == "add_softmax":
+        task_values = float(alpha) * weights
+    else:
+        raise ValueError(f"Unknown scale mode: {mode}")
+
+    for task_id, (start, end) in enumerate(zip(task_starts.tolist(), task_ends.tolist())):
+        if mode.startswith("mul_"):
+            adjusted[:, start:end] *= task_values[:, task_id][:, None]
+        else:
+            adjusted[:, start:end] += task_values[:, task_id][:, None]
+    return adjusted.argmax(axis=1).astype(np.int64)
+
+
 def method_class_bonus(
     shared_logits: np.ndarray,
     shared_topk: np.ndarray,
@@ -489,6 +535,48 @@ def method_class_bonus(
     return pred
 
 
+def method_class_local_bonus(
+    shared_logits: np.ndarray,
+    shared_topk: np.ndarray,
+    expert_logits: Sequence[np.ndarray],
+    class_to_task: np.ndarray,
+    candidate_tasks_by_k: List[np.ndarray],
+    task_starts: np.ndarray,
+    beta: float,
+    rerank_topk: int,
+    normalize_mode: str,
+) -> np.ndarray:
+    pred = shared_logits.argmax(axis=1).astype(np.int64)
+    width = min(rerank_topk, shared_topk.shape[1])
+    expert_lookup = [normalize_rows_np(arr, normalize_mode) for arr in expert_logits]
+    for i in range(shared_logits.shape[0]):
+        candidate_classes = shared_topk[i, :width]
+        scores = shared_logits[i, candidate_classes].copy()
+        candidate_task_set = set(candidate_tasks_by_k[i].tolist())
+        for j, class_idx in enumerate(candidate_classes.tolist()):
+            task_id = int(class_to_task[class_idx])
+            if task_id not in candidate_task_set:
+                continue
+            local_idx = int(class_idx - task_starts[task_id])
+            scores[j] += float(beta) * float(expert_lookup[task_id][i, local_idx])
+        pred[i] = int(candidate_classes[int(np.argmax(scores))])
+    return pred
+
+
+def method_local_bonus_all_classes(
+    shared_logits: np.ndarray,
+    expert_logits: Sequence[np.ndarray],
+    task_starts: np.ndarray,
+    task_ends: np.ndarray,
+    beta: float,
+    normalize_mode: str,
+) -> np.ndarray:
+    adjusted = shared_logits.copy()
+    for task_id, (start, end) in enumerate(zip(task_starts.tolist(), task_ends.tolist())):
+        adjusted[:, start:end] += float(beta) * normalize_rows_np(expert_logits[task_id], normalize_mode)
+    return adjusted.argmax(axis=1).astype(np.int64)
+
+
 def method_task_bonus_select_task_then_shared(
     block_scores: np.ndarray,
     metric: np.ndarray,
@@ -510,6 +598,35 @@ def method_task_bonus_select_task_then_shared(
             chosen_task = choose_task_by_score(candidate_tasks, score_vec, int(baseline_task[i]))
         start, end = int(task_starts[chosen_task]), int(task_ends[chosen_task])
         pred[i] = start + int(np.argmax(shared_logits[i, start:end]))
+    return pred
+
+
+def method_select_task_then_local_bonus(
+    block_scores: np.ndarray,
+    metric: np.ndarray,
+    candidate_tasks_by_k: List[np.ndarray],
+    task_starts: np.ndarray,
+    task_ends: np.ndarray,
+    shared_logits: np.ndarray,
+    expert_logits: Sequence[np.ndarray],
+    alpha: float,
+    beta: float,
+    normalize_mode: str,
+) -> np.ndarray:
+    pred = np.zeros((shared_logits.shape[0],), dtype=np.int64)
+    baseline_task = block_scores.argmax(axis=1)
+    expert_lookup = [normalize_rows_np(arr, normalize_mode) for arr in expert_logits]
+    for i in range(shared_logits.shape[0]):
+        candidate_tasks = candidate_tasks_by_k[i]
+        if candidate_tasks.size == 0:
+            chosen_task = int(baseline_task[i])
+        else:
+            score_vec = block_scores[i].copy()
+            score_vec[candidate_tasks] += float(alpha) * metric[i, candidate_tasks]
+            chosen_task = choose_task_by_score(candidate_tasks, score_vec, int(baseline_task[i]))
+        start, end = int(task_starts[chosen_task]), int(task_ends[chosen_task])
+        local_scores = shared_logits[i, start:end] + float(beta) * expert_lookup[chosen_task][i]
+        pred[i] = start + int(np.argmax(local_scores))
     return pred
 
 
@@ -596,29 +713,38 @@ def grid_values(preset: str) -> Dict[str, Sequence[Any]]:
         return {
             "candidate_topk": [2, 3],
             "rerank_topk": [3, 5],
+            "temperature": [0.5, 1.0, 2.0],
             "alpha_relation": [0.05, 0.1, 0.2, 0.5, 1.0],
+            "beta_local": [0.05, 0.1, 0.2, 0.5],
             "alpha_margin": [0.05, 0.1, 0.2],
             "alpha_entropy": [0.05, 0.1, 0.2],
             "beta_margin": [0.05, 0.1],
+            "normalize_mode": ["none", "zscore"],
             "gap_quantile": [0.2, 0.4],
         }
     if preset == "full":
         return {
             "candidate_topk": [2, 3, 5],
             "rerank_topk": [2, 3, 5],
+            "temperature": [0.25, 0.5, 1.0, 2.0, 4.0],
             "alpha_relation": [0.01, 0.03, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0],
+            "beta_local": [0.01, 0.03, 0.05, 0.1, 0.2, 0.5, 1.0],
             "alpha_margin": [0.01, 0.03, 0.05, 0.1, 0.2, 0.5, 1.0],
             "alpha_entropy": [0.01, 0.03, 0.05, 0.1, 0.2, 0.5, 1.0],
             "beta_margin": [0.01, 0.03, 0.05, 0.1, 0.2, 0.5],
+            "normalize_mode": ["none", "zscore", "minmax"],
             "gap_quantile": [0.05, 0.1, 0.2, 0.3, 0.4, 0.5],
         }
     return {
         "candidate_topk": [2, 3, 5],
         "rerank_topk": [3, 5],
+        "temperature": [0.5, 1.0, 2.0, 4.0],
         "alpha_relation": [0.03, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0],
+        "beta_local": [0.03, 0.05, 0.1, 0.2, 0.5, 1.0],
         "alpha_margin": [0.01, 0.05, 0.1, 0.2, 0.5],
         "alpha_entropy": [0.01, 0.05, 0.1, 0.2, 0.5],
         "beta_margin": [0.01, 0.05, 0.1, 0.2],
+        "normalize_mode": ["none", "zscore", "minmax"],
         "gap_quantile": [0.1, 0.2, 0.3, 0.4, 0.5],
     }
 
@@ -697,6 +823,46 @@ def run_sweep(
             )
             push_row("task_relation_all_classes", pred, metric=metric_name, alpha=alpha)
 
+    for metric_name in ["sim_cos", "sim_cos_z", "sim_js"]:
+        for scale_mode, temperature, alpha in itertools.product(
+            ["mul_centered", "mul_softmax", "add_softmax"],
+            grids["temperature"],
+            grids["alpha_relation"],
+        ):
+            pred = method_softmax_scale_then_shared(
+                shared_logits=shared_logits,
+                metric=metrics[metric_name],
+                task_starts=task_starts,
+                task_ends=task_ends,
+                alpha=float(alpha),
+                temperature=float(temperature),
+                mode=scale_mode,
+            )
+            push_row(
+                "softmax_scale_then_shared",
+                pred,
+                metric=metric_name,
+                scale_mode=scale_mode,
+                temperature=temperature,
+                alpha=alpha,
+            )
+
+    for normalize_mode, beta in itertools.product(grids["normalize_mode"], grids["beta_local"]):
+        pred = method_local_bonus_all_classes(
+            shared_logits=shared_logits,
+            expert_logits=expert_logits,
+            task_starts=task_starts,
+            task_ends=task_ends,
+            beta=float(beta),
+            normalize_mode=normalize_mode,
+        )
+        push_row(
+            "local_bonus_all_classes",
+            pred,
+            normalize_mode=normalize_mode,
+            beta=beta,
+        )
+
     for metric_name in ["sim_js", "sim_cos", "sim_cos_z"]:
         for candidate_topk, rerank_topk, alpha in itertools.product(
             candidate_topk_values, rerank_topk_values, grids["alpha_relation"]
@@ -719,6 +885,32 @@ def run_sweep(
                 alpha=alpha,
             )
 
+    for candidate_topk, rerank_topk, normalize_mode, beta in itertools.product(
+        candidate_topk_values,
+        rerank_topk_values,
+        grids["normalize_mode"],
+        grids["beta_local"],
+    ):
+        pred = method_class_local_bonus(
+            shared_logits=shared_logits,
+            shared_topk=shared_topk,
+            expert_logits=expert_logits,
+            class_to_task=class_to_task,
+            candidate_tasks_by_k=candidate_tasks_lookup[candidate_topk],
+            task_starts=task_starts,
+            beta=float(beta),
+            rerank_topk=int(rerank_topk),
+            normalize_mode=normalize_mode,
+        )
+        push_row(
+            "class_local_bonus",
+            pred,
+            candidate_topk=candidate_topk,
+            rerank_topk=rerank_topk,
+            normalize_mode=normalize_mode,
+            beta=beta,
+        )
+
     for metric_name in ["sim_js", "sim_cos", "sim_cos_z", "expert_margin", "expert_neg_entropy"]:
         alpha_grid = grids["alpha_relation"] if metric_name.startswith("sim_") else (
             grids["alpha_margin"] if metric_name == "expert_margin" else grids["alpha_entropy"]
@@ -739,6 +931,38 @@ def run_sweep(
                 metric=metric_name,
                 candidate_topk=candidate_topk,
                 alpha=alpha,
+            )
+
+    for metric_name in ["sim_js", "sim_cos", "sim_cos_z", "expert_margin", "expert_neg_entropy"]:
+        alpha_grid = grids["alpha_relation"] if metric_name.startswith("sim_") else (
+            grids["alpha_margin"] if metric_name == "expert_margin" else grids["alpha_entropy"]
+        )
+        for candidate_topk, normalize_mode, alpha, beta in itertools.product(
+            candidate_topk_values,
+            grids["normalize_mode"],
+            alpha_grid,
+            grids["beta_local"],
+        ):
+            pred = method_select_task_then_local_bonus(
+                block_scores=block_scores,
+                metric=metrics[metric_name],
+                candidate_tasks_by_k=candidate_tasks_lookup[candidate_topk],
+                task_starts=task_starts,
+                task_ends=task_ends,
+                shared_logits=shared_logits,
+                expert_logits=expert_logits,
+                alpha=float(alpha),
+                beta=float(beta),
+                normalize_mode=normalize_mode,
+            )
+            push_row(
+                "select_task_then_local_bonus",
+                pred,
+                metric=metric_name,
+                candidate_topk=candidate_topk,
+                normalize_mode=normalize_mode,
+                alpha=alpha,
+                beta=beta,
             )
 
     for candidate_topk, alpha in itertools.product(candidate_topk_values, grids["alpha_relation"]):
@@ -823,7 +1047,14 @@ def run_sweep(
     best_rows = []
     seen_keys = set()
     for row in rows_sorted:
-        key = (row["method"], row.get("metric"), row.get("metric_a"), row.get("metric_b"))
+        key = (
+            row["method"],
+            row.get("metric"),
+            row.get("metric_a"),
+            row.get("metric_b"),
+            row.get("normalize_mode"),
+            row.get("scale_mode"),
+        )
         if key in seen_keys:
             continue
         seen_keys.add(key)
