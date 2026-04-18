@@ -256,13 +256,13 @@ def get_backbone(args, pretrained=False):
             drop_path_rate=0.0,
             tuning_config=tuning_config,
             r=args["r"],
-            expert_tokens=args.get("expert_tokens", 4),
-            shared_lora_rank=args.get("shared_lora_rank", 8),
-            shared_lora_alpha=args.get("shared_lora_alpha", 1.0),
-            vera_rank=args.get("vera_rank", 256),
-            vera_dropout=args.get("vera_dropout", 0.0),
-            vera_d_initial=args.get("vera_d_initial", 0.1),
-            vera_save_projection=args.get("vera_save_projection", True),
+            expert_tokens=args["expert_tokens"],
+            shared_lora_rank=args["shared_lora_rank"],
+            shared_lora_alpha=args["shared_lora_alpha"],
+            vera_rank=args["vera_rank"],
+            vera_dropout=args["vera_dropout"],
+            vera_d_initial=args["vera_d_initial"],
+            vera_save_projection=args["vera_save_projection"],
         )
         if name == "vit_base_patch16_224_spie_v13":
             model = vit_spie_v13.vit_base_patch16_224_spie_v13(**common_kwargs)

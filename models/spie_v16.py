@@ -50,9 +50,6 @@ class SPIEV16Net(nn.Module):
         self.backbone.out_dim = getattr(self.backbone, "out_dim", 768)
         self.fc_shared_cls = None
         self.expert_heads = nn.ModuleList()
-        self.register_buffer("expert_energy_mean_in", torch.zeros(0, dtype=torch.float32))
-        self.register_buffer("expert_energy_std_in", torch.ones(0, dtype=torch.float32))
-        self.local_head_scale = float(args.get("expert_local_head_scale", 10.0))
         self._device = args["device"][0]
 
     @property
@@ -77,8 +74,6 @@ class SPIEV16Net(nn.Module):
             head.requires_grad_(False)
         head = self.generate_fc(self.expert_feature_dim, nb_classes).to(self._device)
         self.expert_heads.append(head)
-        self.expert_energy_mean_in = torch.cat((self.expert_energy_mean_in, self.expert_energy_mean_in.new_zeros(1)))
-        self.expert_energy_std_in = torch.cat((self.expert_energy_std_in, self.expert_energy_std_in.new_ones(1)))
         return head
 
     def get_expert_head(self, task_id):
@@ -88,22 +83,6 @@ class SPIEV16Net(nn.Module):
 
     def freeze_expert_head(self, task_id):
         self.get_expert_head(task_id).requires_grad_(False)
-
-    def get_expert_energy_stats(self, task_id):
-        if task_id >= self.expert_energy_mean_in.shape[0]:
-            raise IndexError(f"Expert energy stats for task {task_id} are not initialized.")
-        return self.expert_energy_mean_in[task_id], self.expert_energy_std_in[task_id]
-
-    @torch.no_grad()
-    def set_expert_energy_stats(self, task_id, mean, std):
-        if task_id >= self.expert_energy_mean_in.shape[0]:
-            raise IndexError(f"Expert energy stats for task {task_id} are not initialized.")
-        self.expert_energy_mean_in[task_id].copy_(
-            torch.as_tensor(mean, dtype=self.expert_energy_mean_in.dtype, device=self.expert_energy_mean_in.device)
-        )
-        self.expert_energy_std_in[task_id].copy_(
-            torch.as_tensor(std, dtype=self.expert_energy_std_in.dtype, device=self.expert_energy_std_in.device)
-        )
 
     def forward_shared_cls(self, x, train=False):
         if self.fc_shared_cls is None:
@@ -133,44 +112,25 @@ class Learner(BaseLearner):
         self.task_class_ranges = []
 
         self.batch_size = args["batch_size"]
-        self.init_lr = args["init_lr"]
-        self.weight_decay = args["weight_decay"] if args["weight_decay"] is not None else 0.0005
-        self.min_lr = args["min_lr"] if args["min_lr"] is not None else 1e-8
+        self.weight_decay = args["weight_decay"]
+        self.min_lr = args["min_lr"]
         self.args = args
-        self.args["tuned_epoch"] = args["tuned_epoch"]
-        self.ca_lr = args["ca_lr"]
-        self.crct_epochs = args["crct_epochs"]
+        self.share_lora_weight_decay = float(args["share_lora_weight_decay"])
+        self.expert_head_weight_decay = float(args["expert_head_weight_decay"])
 
-        self.share_lora_weight_decay = float(args.get("share_lora_weight_decay", self.weight_decay))
-        self.expert_head_weight_decay = float(args.get("expert_head_weight_decay", self.weight_decay))
+        self.task0_shared_epochs = int(args["task0_shared_epochs"])
+        self.task0_shared_lr = float(args["task0_shared_lr"])
+        self.shared_cls_epochs = int(args["shared_cls_epochs"])
+        self.shared_cls_lr = float(args["shared_cls_lr"])
+        self.shared_cls_weight_decay = float(args["shared_cls_weight_decay"])
+        self.shared_cls_ca_lr = float(args["shared_cls_ca_lr"])
+        self.shared_cls_crct_epochs = int(args["shared_cls_crct_epochs"])
+        self.freeze_shared_lora_after_task0 = bool(args["freeze_shared_lora_after_task0"])
 
-        self.task0_shared_epochs = int(args.get("task0_shared_epochs", args["tuned_epoch"]))
-        self.task0_shared_lr = float(args.get("task0_shared_lr", self.init_lr * args.get("task0_shared_lr_scale", 1.0)))
-        self.shared_cls_epochs = int(args.get("shared_cls_epochs", args["tuned_epoch"]))
-        self.shared_cls_lr = float(args.get("shared_cls_lr", self.init_lr))
-        self.shared_cls_weight_decay = float(args.get("shared_cls_weight_decay", self.weight_decay))
-        self.shared_cls_ca_lr = float(args.get("shared_cls_ca_lr", self.ca_lr))
-        self.shared_cls_crct_epochs = int(args.get("shared_cls_crct_epochs", self.crct_epochs))
-        self.freeze_shared_lora_after_task0 = bool(args.get("freeze_shared_lora_after_task0", True))
-
-        self.task0_expert_epochs = int(args.get("task0_expert_epochs", args["tuned_epoch"]))
-        self.task0_expert_lr = float(args.get("task0_expert_lr", self.init_lr))
-        self.incremental_expert_epochs = int(args.get("incremental_expert_epochs", args["tuned_epoch"]))
-        self.incremental_expert_lr = float(
-            args.get("incremental_expert_lr", self.init_lr * args.get("incremental_expert_lr_scale", 1.0))
-        )
-        self.expert_loss_type = str(args.get("expert_loss_type", "cosface")).lower()
-        self.expert_loss_scale = float(args.get("expert_loss_scale", args.get("scale", 20.0)))
-        self.expert_loss_margin = float(args.get("expert_loss_margin", args.get("m", 0.0)))
-        self.energy_topk = max(int(args.get("energy_topk", 5)), 1)
-
-        self.verifier_topk = min(int(args.get("verifier_topk", self.topk)), self.topk)
-        self.verifier_local_topk = max(int(args.get("verifier_local_topk", 3)), 1)
-        self.verifier_alpha = float(args.get("verifier_alpha", 0.5))
-        self.verifier_align_epochs = int(args.get("verifier_align_epochs", 1))
-        self.verifier_align_lr = float(args.get("verifier_align_lr", self.shared_cls_lr))
-        self.verifier_align_weight = float(args.get("verifier_align_weight", 0.25))
-        self.verifier_eps = float(args.get("verifier_eps", 1e-8))
+        self.task0_expert_epochs = int(args["task0_expert_epochs"])
+        self.task0_expert_lr = float(args["task0_expert_lr"])
+        self.incremental_expert_epochs = int(args["incremental_expert_epochs"])
+        self.incremental_expert_lr = float(args["incremental_expert_lr"])
 
         for name, param in self._network.backbone.named_parameters():
             param.requires_grad = (
@@ -194,15 +154,12 @@ class Learner(BaseLearner):
         logging.info(
             (
                 "SPiE v16 expert branch: task0 epochs=%s lr=%s, incremental epochs=%s lr=%s, "
-                "head=shared_tunalinear, loss=cosface, energy_topk=%s, align_epochs=%s, align_weight=%s."
+                "head=shared_tunalinear."
             ),
             self.task0_expert_epochs,
             self.task0_expert_lr,
             self.incremental_expert_epochs,
             self.incremental_expert_lr,
-            self.energy_topk,
-            self.verifier_align_epochs,
-            self.verifier_align_weight,
         )
 
     def _backbone_module(self):
@@ -250,7 +207,7 @@ class Learner(BaseLearner):
             num_workers=num_workers,
         )
 
-        use_backbone_dataparallel = bool(self.args.get("spie_v15_backbone_dataparallel", False))
+        use_backbone_dataparallel = bool(self.args["spie_v15_backbone_dataparallel"])
         if use_backbone_dataparallel and len(self._multiple_gpus) > 1:
             self._network.backbone = nn.DataParallel(self._network.backbone, self._multiple_gpus)
 
@@ -350,8 +307,8 @@ class Learner(BaseLearner):
         covariance = torch.nan_to_num(covariance, nan=0.0, posinf=0.0, neginf=0.0)
         covariance = 0.5 * (covariance + covariance.T)
 
-        base_jitter = float(self.args.get("covariance_regularization", 1e-4))
-        max_retry_power = int(self.args.get("max_covariance_retry_power", 6))
+        base_jitter = float(self.args["covariance_regularization"])
+        max_retry_power = int(self.args["max_covariance_retry_power"])
         eye = torch.eye(covariance.shape[-1], device=covariance.device, dtype=covariance.dtype)
 
         for power in range(max_retry_power + 1):
@@ -367,47 +324,6 @@ class Learner(BaseLearner):
         repaired_covariance = covariance + eye * jitter
         scale_tril = torch.linalg.cholesky(repaired_covariance).to(dtype=torch.float32)
         return MultivariateNormal(mean, scale_tril=scale_tril)
-
-    def _energy_from_logits(self, logits):
-        return torch.logsumexp(logits, dim=-1)
-
-    def _init_running_energy_stats(self):
-        return {
-            "count": 0,
-            "mean": torch.zeros((), device=self._device, dtype=torch.float32),
-            "m2": torch.zeros((), device=self._device, dtype=torch.float32),
-        }
-
-    def _update_running_energy_stats(self, stats, values):
-        values = values.detach().reshape(-1).to(device=self._device, dtype=torch.float32)
-        if values.numel() == 0:
-            return stats
-
-        batch_count = values.numel()
-        batch_mean = values.mean()
-        batch_var = values.var(unbiased=False)
-        batch_m2 = batch_var * batch_count
-
-        if stats["count"] == 0:
-            stats["count"] = batch_count
-            stats["mean"] = batch_mean
-            stats["m2"] = batch_m2
-            return stats
-
-        total_count = stats["count"] + batch_count
-        delta = batch_mean - stats["mean"]
-        stats["mean"] = stats["mean"] + delta * batch_count / total_count
-        stats["m2"] = stats["m2"] + batch_m2 + delta.pow(2) * stats["count"] * batch_count / total_count
-        stats["count"] = total_count
-        return stats
-
-    def _finalize_running_energy_stats(self, stats):
-        if stats["count"] <= 0:
-            return 0.0, 1.0
-
-        variance = stats["m2"] / stats["count"]
-        std = torch.sqrt(variance.clamp_min(1e-12))
-        return stats["mean"].detach(), std.detach()
 
     def _zscore_tensor(self, values, dim=-1, eps=1e-6):
         if values.shape[dim] <= 1:
@@ -478,13 +394,6 @@ class Learner(BaseLearner):
         self._set_current_expert_requires_grad(False)
         self._set_expert_head_requires_grad(self._cur_task, False)
         backbone_module.adapter_update()
-
-        self._train_shared_expert_alignment(
-            train_loader=train_loader,
-            epochs=self.verifier_align_epochs,
-            align_lr=self.verifier_align_lr,
-            stage="verifier_alignment",
-        )
 
         self._compute_shared_cls_mean(backbone)
         if self._cur_task > 0:
@@ -566,14 +475,11 @@ class Learner(BaseLearner):
         prog_bar = tqdm(range(epochs))
         expert_head = self._network.get_expert_head(self._cur_task)
         loss_cos = AngularPenaltySMLoss(loss_type="cosface", eps=1e-7, s=self.args["scale"], m=self.args["m"])
-        running_energy_stats = self._init_running_energy_stats()
         for _, epoch in enumerate(prog_bar):
             self._network.backbone.train()
             expert_head.train()
             losses = 0.0
             ce_losses = 0.0
-            batch_energy_means = 0.0
-            batch_energy_stds = 0.0
             correct, total = 0, 0
 
             for _, (_, inputs, targets) in enumerate(train_loader):
@@ -582,19 +488,15 @@ class Learner(BaseLearner):
                 expert_features = self._network.backbone(inputs, adapter_id=self._cur_task, train=True)["expert_features"]
                 expert_out = expert_head(expert_features)
                 logits = expert_out["logits"]
-                energy_scores = self._energy_from_logits(logits)
                 ce_loss = loss_cos(logits, local_targets)
                 loss = ce_loss
 
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
-                running_energy_stats = self._update_running_energy_stats(running_energy_stats, energy_scores)
 
                 losses += loss.item()
                 ce_losses += ce_loss.item()
-                batch_energy_means += energy_scores.mean().item()
-                batch_energy_stds += energy_scores.std(unbiased=False).item()
                 preds = torch.argmax(logits, dim=1) + self._known_classes
                 correct += preds.eq(targets.expand_as(preds)).cpu().sum()
                 total += len(targets)
@@ -606,8 +508,6 @@ class Learner(BaseLearner):
             lr = optimizer.param_groups[0]["lr"]
             avg_loss = losses / len(train_loader)
             avg_ce_loss = ce_losses / len(train_loader)
-            avg_energy_mean = batch_energy_means / len(train_loader)
-            avg_energy_std = batch_energy_stds / len(train_loader)
             info = "Task {}, {}, Epoch {}/{} => Loss {:.3f}, Train_accy {:.2f}".format(
                 self._cur_task,
                 stage,
@@ -624,131 +524,10 @@ class Learner(BaseLearner):
                 lr=float(lr),
                 stage=stage,
                 ce_loss=float(avg_ce_loss),
-                batch_energy_mean=float(avg_energy_mean),
-                batch_energy_std=float(avg_energy_std),
-            )
-            prog_bar.set_description(info)
-
-        energy_mean_in, energy_std_in = self._finalize_running_energy_stats(running_energy_stats)
-        self._network.set_expert_energy_stats(self._cur_task, energy_mean_in, energy_std_in)
-        logging.info(
-            "Task %s expert energy stats saved: mean=%.4f std=%.4f",
-            self._cur_task,
-            float(torch.as_tensor(energy_mean_in).item()),
-            float(torch.as_tensor(energy_std_in).item()),
-        )
-        logging.info(info)
-
-    def _train_shared_expert_alignment(self, train_loader, epochs, align_lr, stage):
-        if epochs <= 0 or self.verifier_align_weight <= 0:
-            return
-
-        backbone_module = self._backbone_module()
-        train_shared_lora = not self.freeze_shared_lora_after_task0 or self._cur_task == 0
-        self._set_shared_lora_requires_grad(train_shared_lora)
-        self._set_current_expert_requires_grad(False)
-        self._set_expert_head_requires_grad(self._cur_task, False)
-
-        optimizer = self._shared_branch_optimizer(align_lr)
-        scheduler = self._get_scheduler_for_epochs(optimizer, epochs)
-        prog_bar = tqdm(range(epochs))
-        loss_cos = AngularPenaltySMLoss(loss_type="cosface", eps=1e-7, s=self.args["scale"], m=self.args["m"])
-        expert_head = self._network.get_expert_head(self._cur_task)
-
-        for _, epoch in enumerate(prog_bar):
-            self._network.backbone.train()
-            self._network.fc_shared_cls.train()
-            expert_head.eval()
-            if self._cur_task < len(backbone_module.adapter_list):
-                backbone_module.adapter_list[self._cur_task].eval()
-            losses = 0.0
-            correct, total = 0, 0
-
-            for _, (_, inputs, targets) in enumerate(train_loader):
-                inputs, targets = inputs.to(self._device), targets.to(self._device)
-                local_targets = targets - self._known_classes
-
-                cls_features = self._network.backbone(inputs, adapter_id=-1, train=True)["cls_features"]
-                shared_logits = self._network.fc_shared_cls(cls_features)["logits"]
-                shared_task_logits = shared_logits[:, self._known_classes : self._total_classes]
-
-                with torch.no_grad():
-                    expert_features = self._network.backbone(inputs, adapter_id=self._cur_task, train=False)["expert_features"]
-                    expert_logits = expert_head(expert_features)["logits"]
-
-                ce_loss = loss_cos(shared_task_logits, local_targets)
-                align_loss = self._batch_task_local_js(shared_task_logits, expert_logits).mean()
-                loss = ce_loss + self.verifier_align_weight * align_loss
-
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-
-                losses += loss.item()
-                preds = torch.argmax(shared_task_logits, dim=1) + self._known_classes
-                correct += preds.eq(targets.expand_as(preds)).cpu().sum()
-                total += len(targets)
-
-            if scheduler:
-                scheduler.step()
-
-            train_acc = np.around(tensor2numpy(correct) * 100 / total, decimals=2)
-            lr = optimizer.param_groups[0]["lr"]
-            avg_loss = losses / len(train_loader)
-            info = "Task {}, {}, Epoch {}/{} => Loss {:.3f}, Train_accy {:.2f}".format(
-                self._cur_task,
-                stage,
-                epoch + 1,
-                epochs,
-                avg_loss,
-                train_acc,
-            )
-            self._record_extra_stage_epoch(
-                stage=stage,
-                epoch=epoch + 1,
-                total_epochs=epochs,
-                loss=float(avg_loss),
-                acc=float(train_acc),
-                lr=float(lr),
-                align_weight=float(self.verifier_align_weight),
-                shared_lora_trainable=bool(train_shared_lora),
             )
             prog_bar.set_description(info)
 
         logging.info(info)
-        self._set_shared_lora_requires_grad(False)
-
-    def _support_union_indices(self, shared_slice, expert_slice):
-        shared_k = min(self.verifier_local_topk, shared_slice.numel())
-        expert_k = min(self.verifier_local_topk, expert_slice.numel())
-        shared_idx = torch.topk(shared_slice, k=shared_k, dim=0, largest=True, sorted=False).indices
-        expert_idx = torch.topk(expert_slice, k=expert_k, dim=0, largest=True, sorted=False).indices
-        return torch.unique(torch.cat((shared_idx, expert_idx), dim=0), sorted=True)
-
-    def _task_local_js(self, shared_slice, expert_slice):
-        if shared_slice.numel() == 0 or expert_slice.numel() == 0:
-            return shared_slice.new_zeros(())
-
-        support = self._support_union_indices(shared_slice, expert_slice)
-        shared_local = F.softmax(shared_slice[support], dim=0)
-        expert_local = F.softmax(expert_slice[support], dim=0)
-        midpoint = 0.5 * (shared_local + expert_local)
-
-        shared_log = torch.log(shared_local.clamp_min(self.verifier_eps))
-        expert_log = torch.log(expert_local.clamp_min(self.verifier_eps))
-        midpoint_log = torch.log(midpoint.clamp_min(self.verifier_eps))
-        shared_kl = torch.sum(shared_local * (shared_log - midpoint_log))
-        expert_kl = torch.sum(expert_local * (expert_log - midpoint_log))
-        return 0.5 * (shared_kl + expert_kl)
-
-    def _batch_task_local_js(self, shared_slices, expert_slices):
-        js_values = []
-        for sample_idx in range(shared_slices.shape[0]):
-            js_values.append(self._task_local_js(shared_slices[sample_idx], expert_slices[sample_idx]))
-        return torch.stack(js_values, dim=0)
-
-    def _batch_task_local_similarity(self, shared_slices, expert_slices):
-        return torch.exp(-self._batch_task_local_js(shared_slices, expert_slices))
 
     def _shared_cls_logits(self, inputs):
         cls_features = self._network.backbone(inputs, adapter_id=-1, train=False)["cls_features"]
@@ -883,83 +662,6 @@ class Learner(BaseLearner):
             predicts[sample_idx, :rerank_width] = reranked_classes
 
         return predicts
-
-    def _select_candidate_tasks(self, topk_indices):
-        candidate_tasks = []
-        unique_task_ids = []
-        seen_global = set()
-
-        for row in topk_indices.tolist():
-            row_tasks = []
-            row_seen = set()
-            for class_idx in row[: self.energy_topk]:
-                if class_idx < 0:
-                    continue
-                task_id = self._class_to_task_id(int(class_idx))
-                if task_id not in row_seen:
-                    row_seen.add(task_id)
-                    row_tasks.append(task_id)
-                if task_id not in seen_global:
-                    seen_global.add(task_id)
-                    unique_task_ids.append(task_id)
-            candidate_tasks.append(row_tasks)
-
-        return candidate_tasks, unique_task_ids
-
-    def _compute_task_local_similarities(self, inputs, shared_logits, topk_indices):
-        _, unique_task_ids = self._select_candidate_tasks(topk_indices)
-        if not unique_task_ids:
-            return {}
-
-        task_similarities = {}
-        backbone = self._backbone_module()
-        if len(unique_task_ids) > 1 and hasattr(backbone, "forward_multi_expert_features"):
-            res = backbone.forward_multi_expert_features(inputs, unique_task_ids)
-            expert_feature_map = {
-                task_id: res["expert_features"][local_idx]
-                for local_idx, task_id in enumerate(unique_task_ids)
-            }
-        else:
-            expert_feature_map = {}
-            for task_id in unique_task_ids:
-                expert_feature_map[task_id] = self._network.backbone(inputs, adapter_id=task_id, train=False)[
-                    "expert_features"
-                ]
-
-        for task_id in unique_task_ids:
-            start_idx, end_idx = self.task_class_ranges[task_id]
-            shared_slice = shared_logits[:, start_idx:end_idx]
-            expert_logits = self._network.get_expert_head(task_id)(expert_feature_map[task_id])["logits"]
-            task_similarities[task_id] = self._batch_task_local_similarity(shared_slice, expert_logits)
-
-        return task_similarities
-
-    def _rerank_topk(self, shared_logits, topk_indices, task_similarities):
-        reranked = topk_indices.clone()
-        candidate_width = min(self.verifier_topk, topk_indices.shape[1])
-
-        for sample_idx in range(topk_indices.shape[0]):
-            candidate_classes = topk_indices[sample_idx, :candidate_width]
-            valid_mask = candidate_classes >= 0
-            valid_classes = candidate_classes[valid_mask]
-            if valid_classes.numel() == 0:
-                continue
-
-            adjusted_scores = []
-            for class_idx in valid_classes.tolist():
-                class_idx = int(class_idx)
-                task_id = self._class_to_task_id(class_idx)
-                bonus = 0.0
-                if task_id in task_similarities:
-                    bonus = self.verifier_alpha * task_similarities[task_id][sample_idx]
-                adjusted_scores.append(shared_logits[sample_idx, class_idx] + bonus)
-
-            adjusted_scores = torch.stack(adjusted_scores, dim=0)
-            order = torch.argsort(adjusted_scores, descending=True)
-            reranked[sample_idx, :candidate_width] = candidate_classes
-            reranked[sample_idx, : valid_classes.numel()] = valid_classes[order]
-
-        return reranked
 
     def eval_task(self):
         raw_cnn_pred, y_true = self._eval_cnn(self.test_loader)
