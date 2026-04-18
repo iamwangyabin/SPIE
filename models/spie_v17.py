@@ -39,6 +39,10 @@ class SPIEV17Net(nn.Module):
     def feature_dim(self):
         return self.backbone.out_dim
 
+    @property
+    def expert_feature_dim(self):
+        return self.backbone.out_dim * 2
+
     def generate_fc(self, in_dim, out_dim):
         return TunaLinear(in_dim, out_dim)
 
@@ -51,7 +55,7 @@ class SPIEV17Net(nn.Module):
     def append_expert_head(self, nb_classes):
         for head in self.expert_heads:
             head.requires_grad_(False)
-        head = TaskLocalLinearHead(self.feature_dim, nb_classes).to(self._device)
+        head = TaskLocalLinearHead(self.expert_feature_dim, nb_classes).to(self._device)
         self.expert_heads.append(head)
         return head
 
@@ -75,7 +79,7 @@ class SPIEV17Net(nn.Module):
 
 
 class Learner(BaseLearner):
-    """SPiE v17 clean ablation with frozen shared LoRA and lightweight expert heads."""
+    """SPiE v17 clean ablation with frozen shared LoRA and trainable expert adapters."""
 
     _spie_version_name = "SPiE v17"
 
@@ -106,7 +110,11 @@ class Learner(BaseLearner):
         self.relation_alpha = float(args.get("relation_alpha", 0.2))
 
         for name, param in self._network.backbone.named_parameters():
-            param.requires_grad = "cur_shared_adapter" in name
+            param.requires_grad = (
+                "cur_adapter" in name
+                or "cur_expert_tokens" in name
+                or "cur_shared_adapter" in name
+            )
 
         total_params = sum(p.numel() for p in self._network.backbone.parameters())
         total_trainable_params = sum(p.numel() for p in self._network.backbone.parameters() if p.requires_grad)
@@ -124,7 +132,7 @@ class Learner(BaseLearner):
             self.freeze_shared_lora_after_task0,
         )
         logging.info(
-            "SPiE v17 clean expert heads: task0 epochs=%s lr=%s, incremental epochs=%s lr=%s, relation_alpha=%s.",
+            "SPiE v17 clean expert branch: task0 epochs=%s lr=%s, incremental epochs=%s lr=%s, relation_alpha=%s.",
             self.task0_expert_epochs,
             self.task0_expert_lr,
             self.incremental_expert_epochs,
@@ -141,7 +149,7 @@ class Learner(BaseLearner):
         self._known_classes = self._total_classes
 
     def _should_reset_task_modules(self):
-        return False
+        return self._cur_task >= 0
 
     def incremental_train(self, data_manager):
         self._reset_task_logging()
@@ -211,6 +219,11 @@ class Learner(BaseLearner):
     def _set_shared_lora_requires_grad(self, requires_grad):
         self._backbone_module().cur_shared_adapter.requires_grad_(requires_grad)
 
+    def _set_current_expert_requires_grad(self, requires_grad):
+        backbone = self._backbone_module()
+        backbone.cur_adapter.requires_grad_(requires_grad)
+        backbone.cur_expert_tokens.requires_grad = requires_grad
+
     def _set_expert_head_requires_grad(self, task_id, requires_grad):
         self._network.get_expert_head(task_id).requires_grad_(requires_grad)
 
@@ -236,8 +249,19 @@ class Learner(BaseLearner):
         return self._make_optimizer(network_params)
 
     def _current_expert_optimizer(self, lr):
+        backbone = self._backbone_module()
+        expert_params = [
+            p
+            for name, p in backbone.named_parameters()
+            if p.requires_grad and ("cur_adapter" in name or "cur_expert_tokens" in name)
+        ]
         expert_head_params = [p for p in self._network.get_expert_head(self._cur_task).parameters() if p.requires_grad]
         network_params = [
+            {
+                "params": expert_params,
+                "lr": lr,
+                "weight_decay": self.weight_decay,
+            },
             {
                 "params": expert_head_params,
                 "lr": lr,
@@ -246,8 +270,32 @@ class Learner(BaseLearner):
         ]
         return self._make_optimizer(network_params)
 
+    def _collect_expert_logits(self, inputs, task_ids):
+        if not task_ids:
+            return {}
+
+        task_ids = list(task_ids)
+        backbone = self._backbone_module()
+        if len(task_ids) > 1 and hasattr(backbone, "forward_multi_expert_features"):
+            res = backbone.forward_multi_expert_features(inputs, task_ids)
+            expert_feature_map = {
+                task_id: res["expert_features"][local_idx]
+                for local_idx, task_id in enumerate(task_ids)
+            }
+        else:
+            expert_feature_map = {
+                task_id: self._network.backbone(inputs, adapter_id=task_id, train=False)["expert_features"]
+                for task_id in task_ids
+            }
+
+        return {
+            task_id: self._network.get_expert_head(task_id)(expert_feature_map[task_id])["logits"]
+            for task_id in task_ids
+        }
+
     def _train(self, train_loader):
         backbone = self._network.backbone
+        backbone_module = self._backbone_module()
 
         backbone.to(self._device)
         self._network.fc_shared_cls.to(self._device)
@@ -260,11 +308,11 @@ class Learner(BaseLearner):
                 branch_lr=self.task0_shared_lr,
                 stage="task0_shared_branch",
             )
-            self._train_current_expert_head(
+            self._train_current_expert(
                 train_loader=train_loader,
                 epochs=self.task0_expert_epochs,
                 expert_lr=self.task0_expert_lr,
-                stage="task0_expert_head",
+                stage="task0_expert_local",
             )
         else:
             self._train_shared_branch(
@@ -273,15 +321,17 @@ class Learner(BaseLearner):
                 branch_lr=self.shared_cls_lr,
                 stage="shared_cls_head_only",
             )
-            self._train_current_expert_head(
+            self._train_current_expert(
                 train_loader=train_loader,
                 epochs=self.incremental_expert_epochs,
                 expert_lr=self.incremental_expert_lr,
-                stage="incremental_expert_head",
+                stage="incremental_expert_local",
             )
 
         self._set_shared_lora_requires_grad(False)
+        self._set_current_expert_requires_grad(False)
         self._set_expert_head_requires_grad(self._cur_task, False)
+        backbone_module.adapter_update()
 
     def _train_shared_branch(self, train_loader, epochs, branch_lr, stage):
         if epochs <= 0 or self._network.fc_shared_cls is None:
@@ -291,6 +341,7 @@ class Learner(BaseLearner):
         if self._cur_task == 0:
             train_shared_lora = True
         self._set_shared_lora_requires_grad(train_shared_lora)
+        self._set_current_expert_requires_grad(False)
         self._set_expert_head_requires_grad(self._cur_task, False)
 
         optimizer = self._shared_branch_optimizer(branch_lr)
@@ -348,11 +399,12 @@ class Learner(BaseLearner):
         logging.info(info)
         self._set_shared_lora_requires_grad(False)
 
-    def _train_current_expert_head(self, train_loader, epochs, expert_lr, stage):
+    def _train_current_expert(self, train_loader, epochs, expert_lr, stage):
         if epochs <= 0:
             return
 
         self._set_shared_lora_requires_grad(False)
+        self._set_current_expert_requires_grad(True)
         self._set_expert_head_requires_grad(self._cur_task, True)
 
         optimizer = self._current_expert_optimizer(expert_lr)
@@ -361,7 +413,7 @@ class Learner(BaseLearner):
         expert_head = self._network.get_expert_head(self._cur_task)
 
         for _, epoch in enumerate(prog_bar):
-            self._network.backbone.eval()
+            self._network.backbone.train()
             expert_head.train()
             losses = 0.0
             correct, total = 0, 0
@@ -370,9 +422,8 @@ class Learner(BaseLearner):
                 inputs, targets = inputs.to(self._device), targets.to(self._device)
                 local_targets = targets - self._known_classes
 
-                with torch.no_grad():
-                    cls_features = self._network.backbone(inputs, adapter_id=-1, train=False)["cls_features"]
-                logits = expert_head(cls_features)["logits"]
+                expert_features = self._network.backbone(inputs, adapter_id=self._cur_task, train=True)["expert_features"]
+                logits = expert_head(expert_features)["logits"]
                 loss = F.cross_entropy(logits, local_targets)
 
                 optimizer.zero_grad()
@@ -409,6 +460,7 @@ class Learner(BaseLearner):
             prog_bar.set_description(info)
 
         logging.info(info)
+        self._set_current_expert_requires_grad(False)
         self._set_expert_head_requires_grad(self._cur_task, False)
 
     def _shared_cls_logits(self, inputs):
@@ -435,14 +487,14 @@ class Learner(BaseLearner):
         denominator = lhs_centered.norm(dim=1) * rhs_centered.norm(dim=1)
         return numerator / denominator.clamp_min(eps)
 
-    def _relation_fusion_logits(self, shared_logits, cls_features):
+    def _relation_fusion_logits(self, shared_logits, expert_logits_by_task):
         if not self.task_class_ranges:
             return shared_logits
 
         fused_logits = shared_logits.clone()
         for task_id, (start_idx, end_idx) in enumerate(self.task_class_ranges):
             shared_slice = shared_logits[:, start_idx:end_idx]
-            expert_slice = self._network.get_expert_head(task_id)(cls_features)["logits"]
+            expert_slice = expert_logits_by_task[task_id]
             relation_score = self._centered_cosine_batch(shared_slice, expert_slice)
             fused_logits[:, start_idx:end_idx] += self.relation_alpha * relation_score.unsqueeze(1)
         return fused_logits
@@ -484,7 +536,8 @@ class Learner(BaseLearner):
             with torch.no_grad():
                 shared_out = self._network.forward_shared_cls(inputs, train=False)
                 shared_logits = shared_out["logits"][:, : self._total_classes]
-                fused_logits = self._relation_fusion_logits(shared_logits, shared_out["cls_features"])
+                expert_logits_by_task = self._collect_expert_logits(inputs, list(range(len(self.task_class_ranges))))
+                fused_logits = self._relation_fusion_logits(shared_logits, expert_logits_by_task)
                 predicts = self._predict_topk(fused_logits)
 
             y_pred.append(predicts.cpu().numpy())
