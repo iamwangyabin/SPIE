@@ -751,6 +751,7 @@ def grid_values(preset: str) -> Dict[str, Sequence[Any]]:
 
 def run_sweep(
     shared_logits: np.ndarray,
+    expert_logits: Sequence[np.ndarray],
     targets: np.ndarray,
     task_starts: np.ndarray,
     task_ends: np.ndarray,
@@ -1143,6 +1144,7 @@ def main() -> None:
 
     run_sweep(
         shared_logits=cache["shared_logits"],
+        expert_logits=cache["expert_logits"],
         targets=cache["targets"],
         task_starts=cache["task_starts"],
         task_ends=cache["task_ends"],
