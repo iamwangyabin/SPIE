@@ -17,15 +17,6 @@ from utils.toolkit import tensor2numpy
 num_workers = 8
 
 
-class TaskLocalLinearHead(nn.Module):
-    def __init__(self, in_dim, out_dim):
-        super().__init__()
-        self.fc = nn.Linear(in_dim, out_dim, bias=True)
-
-    def forward(self, x):
-        return {"logits": self.fc(x)}
-
-
 class SPIEV17Net(nn.Module):
     def __init__(self, args, pretrained):
         super().__init__()
@@ -55,7 +46,7 @@ class SPIEV17Net(nn.Module):
     def append_expert_head(self, nb_classes):
         for head in self.expert_heads:
             head.requires_grad_(False)
-        head = TaskLocalLinearHead(self.expert_feature_dim, nb_classes).to(self._device)
+        head = self.generate_fc(self.expert_feature_dim, nb_classes).to(self._device)
         self.expert_heads.append(head)
         return head
 
