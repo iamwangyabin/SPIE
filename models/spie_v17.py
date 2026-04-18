@@ -402,11 +402,13 @@ class Learner(BaseLearner):
         scheduler = self._get_scheduler_for_epochs(optimizer, epochs)
         prog_bar = tqdm(range(epochs))
         expert_head = self._network.get_expert_head(self._cur_task)
+        loss_cos = AngularPenaltySMLoss(loss_type="cosface", eps=1e-7, s=self.args["scale"], m=self.args["m"])
 
         for _, epoch in enumerate(prog_bar):
             self._network.backbone.train()
             expert_head.train()
             losses = 0.0
+            ce_losses = 0.0
             correct, total = 0, 0
 
             for _, (_, inputs, targets) in enumerate(train_loader):
@@ -415,13 +417,15 @@ class Learner(BaseLearner):
 
                 expert_features = self._network.backbone(inputs, adapter_id=self._cur_task, train=True)["expert_features"]
                 logits = expert_head(expert_features)["logits"]
-                loss = F.cross_entropy(logits, local_targets)
+                ce_loss = loss_cos(logits, local_targets)
+                loss = ce_loss
 
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
 
                 losses += loss.item()
+                ce_losses += ce_loss.item()
                 preds = torch.argmax(logits, dim=1) + self._known_classes
                 correct += preds.eq(targets.expand_as(preds)).cpu().sum()
                 total += len(targets)
@@ -432,6 +436,7 @@ class Learner(BaseLearner):
             train_acc = np.around(tensor2numpy(correct) * 100 / total, decimals=2)
             lr = optimizer.param_groups[0]["lr"]
             avg_loss = losses / len(train_loader)
+            avg_ce_loss = ce_losses / len(train_loader)
             info = "Task {}, {}, Epoch {}/{} => Loss {:.3f}, Train_accy {:.2f}".format(
                 self._cur_task,
                 stage,
@@ -447,6 +452,7 @@ class Learner(BaseLearner):
                 acc=float(train_acc),
                 lr=float(lr),
                 stage=stage,
+                ce_loss=float(avg_ce_loss),
             )
             prog_bar.set_description(info)
 
