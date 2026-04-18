@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Sequence, Tuple
 
 import numpy as np
 import torch
+from torch import nn, optim
 from torch.utils.data import DataLoader
 
 from utils import factory
@@ -384,6 +385,11 @@ def precompute_metrics(
     sim_cos_z = np.zeros((n, num_tasks), dtype=np.float32)
     expert_margin = np.zeros((n, num_tasks), dtype=np.float32)
     expert_neg_entropy = np.zeros((n, num_tasks), dtype=np.float32)
+    shared_block_max = np.zeros((n, num_tasks), dtype=np.float32)
+    shared_block_margin = np.zeros((n, num_tasks), dtype=np.float32)
+    expert_block_max = np.zeros((n, num_tasks), dtype=np.float32)
+    expert_block_lse = np.zeros((n, num_tasks), dtype=np.float32)
+    shared_expert_top1_agree = np.zeros((n, num_tasks), dtype=np.float32)
     shared_local_top1 = np.zeros((n, num_tasks), dtype=np.int64)
     expert_local_top1 = np.zeros((n, num_tasks), dtype=np.int64)
 
@@ -396,8 +402,15 @@ def precompute_metrics(
         sim_js[:, task_id] = support_union_js_similarity(s, e, local_topk=local_topk)
         expert_margin[:, task_id] = top1_top2_gap(e).astype(np.float32)
         expert_neg_entropy[:, task_id] = (-entropy_from_logits(e, axis=1)).astype(np.float32)
+        shared_block_max[:, task_id] = s.max(axis=1).astype(np.float32)
+        shared_block_margin[:, task_id] = top1_top2_gap(s).astype(np.float32)
+        expert_block_max[:, task_id] = e.max(axis=1).astype(np.float32)
+        expert_block_lse[:, task_id] = logsumexp_np(e, axis=1).astype(np.float32)
         shared_local_top1[:, task_id] = s.argmax(axis=1) + start
         expert_local_top1[:, task_id] = e.argmax(axis=1) + start
+        shared_expert_top1_agree[:, task_id] = (shared_local_top1[:, task_id] == expert_local_top1[:, task_id]).astype(
+            np.float32
+        )
 
     return {
         "block_scores": block_scores,
@@ -406,6 +419,11 @@ def precompute_metrics(
         "sim_cos_z": sim_cos_z,
         "expert_margin": expert_margin,
         "expert_neg_entropy": expert_neg_entropy,
+        "shared_block_max": shared_block_max,
+        "shared_block_margin": shared_block_margin,
+        "expert_block_max": expert_block_max,
+        "expert_block_lse": expert_block_lse,
+        "shared_expert_top1_agree": shared_expert_top1_agree,
         "shared_local_top1": shared_local_top1,
         "expert_local_top1": expert_local_top1,
     }
@@ -721,6 +739,150 @@ def method_gated_task_bonus_then_shared(
     return pred
 
 
+def build_task_probe_matrix(metrics: Dict[str, Any]) -> np.ndarray:
+    feature_order = [
+        "block_scores",
+        "sim_js",
+        "sim_cos",
+        "sim_cos_z",
+        "expert_margin",
+        "expert_neg_entropy",
+        "shared_block_max",
+        "shared_block_margin",
+        "expert_block_max",
+        "expert_block_lse",
+        "shared_expert_top1_agree",
+    ]
+    pieces = [metrics[name].astype(np.float32) for name in feature_order]
+    return np.concatenate(pieces, axis=1).astype(np.float32)
+
+
+def fit_linear_task_probe(
+    x_train: np.ndarray,
+    y_train: np.ndarray,
+    num_tasks: int,
+    epochs: int = 400,
+    lr: float = 0.05,
+    weight_decay: float = 1e-3,
+) -> nn.Module:
+    model = nn.Linear(x_train.shape[1], num_tasks)
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+
+    x_tensor = torch.from_numpy(x_train.astype(np.float32))
+    y_tensor = torch.from_numpy(y_train.astype(np.int64))
+
+    model.train()
+    for _ in range(epochs):
+        logits = model(x_tensor)
+        loss = torch.nn.functional.cross_entropy(logits, y_tensor)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    model.eval()
+    return model
+
+
+def train_eval_linear_task_probe(
+    x_train: np.ndarray,
+    y_train: np.ndarray,
+    x_eval: np.ndarray,
+    num_tasks: int,
+    epochs: int = 400,
+    lr: float = 0.05,
+    weight_decay: float = 1e-3,
+) -> np.ndarray:
+    mean = x_train.mean(axis=0, keepdims=True)
+    std = x_train.std(axis=0, keepdims=True)
+    std = np.clip(std, a_min=EPS, a_max=None)
+
+    x_train_std = ((x_train - mean) / std).astype(np.float32)
+    x_eval_std = ((x_eval - mean) / std).astype(np.float32)
+
+    model = fit_linear_task_probe(
+        x_train=x_train_std,
+        y_train=y_train,
+        num_tasks=num_tasks,
+        epochs=epochs,
+        lr=lr,
+        weight_decay=weight_decay,
+    )
+
+    with torch.no_grad():
+        logits = model(torch.from_numpy(x_eval_std))
+    return logits.cpu().numpy().astype(np.float32)
+
+
+def linear_probe_fullfit_scores(
+    probe_x: np.ndarray,
+    gt_task: np.ndarray,
+    num_tasks: int,
+    weight_decay: float,
+) -> np.ndarray:
+    return train_eval_linear_task_probe(
+        x_train=probe_x,
+        y_train=gt_task,
+        x_eval=probe_x,
+        num_tasks=num_tasks,
+        weight_decay=weight_decay,
+    )
+
+
+def linear_probe_kfold_scores(
+    probe_x: np.ndarray,
+    gt_task: np.ndarray,
+    num_tasks: int,
+    weight_decay: float,
+    folds: int = 5,
+    seed: int = 1993,
+) -> np.ndarray:
+    n = probe_x.shape[0]
+    order = np.random.default_rng(seed).permutation(n)
+    fold_ids = np.array_split(order, folds)
+    out = np.full((n, num_tasks), fill_value=-1e9, dtype=np.float32)
+
+    for fold_idx in range(folds):
+        eval_idx = fold_ids[fold_idx]
+        train_idx = np.concatenate([fold_ids[i] for i in range(folds) if i != fold_idx], axis=0)
+        out[eval_idx] = train_eval_linear_task_probe(
+            x_train=probe_x[train_idx],
+            y_train=gt_task[train_idx],
+            x_eval=probe_x[eval_idx],
+            num_tasks=num_tasks,
+            weight_decay=weight_decay,
+        )
+
+    return out
+
+
+def method_probe_select_task_then_shared(
+    probe_scores: np.ndarray,
+    shared_logits: np.ndarray,
+    task_starts: np.ndarray,
+    task_ends: np.ndarray,
+    candidate_tasks_by_k: List[np.ndarray] | None = None,
+) -> np.ndarray:
+    pred = np.zeros((shared_logits.shape[0],), dtype=np.int64)
+    num_tasks = probe_scores.shape[1]
+
+    for i in range(shared_logits.shape[0]):
+        if candidate_tasks_by_k is None:
+            chosen_task = int(np.argmax(probe_scores[i]))
+        else:
+            candidate_tasks = candidate_tasks_by_k[i]
+            if candidate_tasks.size == 0:
+                chosen_task = int(np.argmax(probe_scores[i]))
+            else:
+                masked = np.full((num_tasks,), fill_value=-1e9, dtype=np.float32)
+                masked[candidate_tasks] = probe_scores[i, candidate_tasks]
+                chosen_task = int(np.argmax(masked))
+
+        start, end = int(task_starts[chosen_task]), int(task_ends[chosen_task])
+        pred[i] = start + int(np.argmax(shared_logits[i, start:end]))
+
+    return pred
+
+
 def grid_values(preset: str) -> Dict[str, Sequence[Any]]:
     if preset == "quick":
         return {
@@ -734,6 +896,7 @@ def grid_values(preset: str) -> Dict[str, Sequence[Any]]:
             "beta_margin": [0.05, 0.1],
             "normalize_mode": ["none", "zscore"],
             "gap_quantile": [0.2, 0.4],
+            "probe_weight_decay": [0.0, 1e-3, 1e-2],
         }
     if preset == "full":
         return {
@@ -747,6 +910,7 @@ def grid_values(preset: str) -> Dict[str, Sequence[Any]]:
             "beta_margin": [0.01, 0.03, 0.05, 0.1, 0.2, 0.5],
             "normalize_mode": ["none", "zscore", "minmax"],
             "gap_quantile": [0.05, 0.1, 0.2, 0.3, 0.4, 0.5],
+            "probe_weight_decay": [0.0, 1e-4, 1e-3, 1e-2, 1e-1],
         }
     return {
         "candidate_topk": [2, 3, 5],
@@ -759,6 +923,7 @@ def grid_values(preset: str) -> Dict[str, Sequence[Any]]:
         "beta_margin": [0.01, 0.05, 0.1, 0.2],
         "normalize_mode": ["none", "zscore", "minmax"],
         "gap_quantile": [0.1, 0.2, 0.3, 0.4, 0.5],
+        "probe_weight_decay": [0.0, 1e-4, 1e-3, 1e-2],
     }
 
 
@@ -785,6 +950,7 @@ def run_sweep(
     }
 
     gt_task = class_to_task[targets]
+    probe_x = build_task_probe_matrix(metrics)
     oracle_shared_pred = method_oracle_shared_local(targets, class_to_task, metrics["shared_local_top1"])
     oracle_expert_pred = method_oracle_expert_local(targets, class_to_task, metrics["expert_local_top1"])
     oracle_summary = {
@@ -1054,6 +1220,83 @@ def run_sweep(
                 alpha=alpha,
                 gap_quantile=gap_q,
                 gap_threshold=gap_threshold,
+            )
+
+    for weight_decay in grids["probe_weight_decay"]:
+        probe_scores = linear_probe_fullfit_scores(
+            probe_x=probe_x,
+            gt_task=gt_task,
+            num_tasks=block_scores.shape[1],
+            weight_decay=float(weight_decay),
+        )
+        probe_task_acc = float((probe_scores.argmax(axis=1) == gt_task).mean() * 100.0)
+
+        pred = method_probe_select_task_then_shared(
+            probe_scores=probe_scores,
+            shared_logits=shared_logits,
+            task_starts=task_starts,
+            task_ends=task_ends,
+        )
+        push_row(
+            "probe_fullfit_then_shared",
+            pred,
+            probe_task_top1=probe_task_acc,
+            weight_decay=weight_decay,
+        )
+
+        for candidate_topk in candidate_topk_values:
+            pred = method_probe_select_task_then_shared(
+                probe_scores=probe_scores,
+                shared_logits=shared_logits,
+                task_starts=task_starts,
+                task_ends=task_ends,
+                candidate_tasks_by_k=candidate_tasks_lookup[candidate_topk],
+            )
+            push_row(
+                "probe_fullfit_masked_then_shared",
+                pred,
+                probe_task_top1=probe_task_acc,
+                weight_decay=weight_decay,
+                candidate_topk=candidate_topk,
+            )
+
+    for weight_decay in grids["probe_weight_decay"]:
+        probe_scores = linear_probe_kfold_scores(
+            probe_x=probe_x,
+            gt_task=gt_task,
+            num_tasks=block_scores.shape[1],
+            weight_decay=float(weight_decay),
+            folds=5,
+        )
+        probe_task_acc = float((probe_scores.argmax(axis=1) == gt_task).mean() * 100.0)
+
+        pred = method_probe_select_task_then_shared(
+            probe_scores=probe_scores,
+            shared_logits=shared_logits,
+            task_starts=task_starts,
+            task_ends=task_ends,
+        )
+        push_row(
+            "probe_5fold_then_shared",
+            pred,
+            probe_task_top1=probe_task_acc,
+            weight_decay=weight_decay,
+        )
+
+        for candidate_topk in candidate_topk_values:
+            pred = method_probe_select_task_then_shared(
+                probe_scores=probe_scores,
+                shared_logits=shared_logits,
+                task_starts=task_starts,
+                task_ends=task_ends,
+                candidate_tasks_by_k=candidate_tasks_lookup[candidate_topk],
+            )
+            push_row(
+                "probe_5fold_masked_then_shared",
+                pred,
+                probe_task_top1=probe_task_acc,
+                weight_decay=weight_decay,
+                candidate_topk=candidate_topk,
             )
 
     rows_sorted = sorted(rows, key=lambda x: (-x["top1"], x["method"]))
