@@ -22,6 +22,8 @@
     "init_lr": 0.01,
     "batch_size": 360,
     "eval_batch_size": 100,
+    "expand_times": 10,
+    "use_amp": true,
     "weight_decay": 0.00005,
     "min_lr": 0.00001,
     "optimizer": "mod_adam",

@@ -219,14 +219,16 @@ class ConsistentMoEPromptBackbone(nn.Module):
         for block_idx, block in enumerate(self.base_model.blocks):
             prompt_layer = self.prompt_layers[str(block_idx)] if str(block_idx) in self.prompt_layers else None
             if prompt_layer is not None:
+                src_num_tokens = x.shape[1]
                 q_x = x[:, 0]
                 if frozen_qx is not None:
                     q_x = self.moe_frozen_qx_coef * frozen_qx + (1.0 - self.moe_frozen_qx_coef) * q_x
                 prompts, balance_loss = prompt_layer(x, q_x)
                 moe_losses.append(balance_loss)
-                x = torch.cat([x[:, :1], prompts, x[:, 1:]], dim=1)
-                x = block(x)
-                x = torch.cat([x[:, :1], x[:, 1 + self.prompt_len :]], dim=1)
+                x_prompt = torch.cat([x, prompts], dim=1)
+                x_attn = block.attn(block.norm1(x_prompt))[:, :src_num_tokens]
+                x = x + block.drop_path1(block.ls1(x_attn))
+                x = x + block.drop_path2(block.ls2(block.mlp(block.norm2(x))))
             else:
                 x = block(x)
 

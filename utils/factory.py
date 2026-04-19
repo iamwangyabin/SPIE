@@ -32,9 +32,11 @@ def get_model(model_name, args):
         from models.mos import Learner
     elif name == "consistent_moe_prompt":
         from models.consistent_moe_prompt import Learner
+    elif name == "arcl":
+        from models.arcl import Learner
     else:
         raise ValueError(
             "Supported model names are 'tuna', 'tunamax', 'spie_v13', 'spie_v14', 'spie_v15', 'spie_v16', 'spie_v17', 'spie_v18', "
-            "'ka_prompt', 'mqmk', 'onlymax', 'min', 'min_ablation', 'moal', 'mos', and 'consistent_moe_prompt'."
+            "'ka_prompt', 'mqmk', 'onlymax', 'min', 'min_ablation', 'moal', 'mos', 'consistent_moe_prompt', and 'arcl'."
         )
     return Learner(args)

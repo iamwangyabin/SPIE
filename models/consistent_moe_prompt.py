@@ -8,12 +8,14 @@ import scipy.ndimage
 import torch
 from PIL import Image
 from torch import Tensor, nn, optim
+from torch.cuda.amp import GradScaler
 from torch.nn import functional as F
 from torch.optim.optimizer import Optimizer
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms as T
 from tqdm import tqdm
 
+from backbone.linears import SimpleContinualLinear
 from models.base import BaseLearner
 from utils.inc_net import TUNANet
 from utils.toolkit import tensor2numpy
@@ -22,15 +24,17 @@ num_workers = 8
 
 
 class PathTransformDataset(Dataset):
-    def __init__(self, paths, labels, transform):
+    def __init__(self, paths, labels, transform, expand_times: int = 1):
         self.paths = paths
         self.labels = labels
         self.transform = transform
+        self.expand_times = max(int(expand_times), 1)
 
     def __len__(self):
-        return len(self.paths)
+        return len(self.paths) * self.expand_times
 
     def __getitem__(self, idx):
+        idx = idx % len(self.paths)
         with open(self.paths[idx], "rb") as f:
             image = Image.open(f).convert("RGB")
         return idx, self.transform(image), int(self.labels[idx])
@@ -112,6 +116,8 @@ class Learner(BaseLearner):
         self.moe_impt_coef = float(args.get("moe_impt_coef", 0.05))
         self.eval_batch_size = int(args.get("eval_batch_size", 100))
         self.eval_workers = int(args.get("eval_workers", 2))
+        self.expand_times = int(args.get("expand_times", 10))
+        self.use_amp = bool(args.get("use_amp", True))
         self._cached_interm_tensor_dict = {}
         self._update_projection_dict = {}
 
@@ -150,7 +156,8 @@ class Learner(BaseLearner):
 
     def _subset_dataset(self, data_manager, indices: np.ndarray, source: str, training: bool):
         data, targets, _ = data_manager.get_dataset(indices, source=source, mode="test", ret_data=True)
-        return PathTransformDataset(data, targets, self._build_transforms(training))
+        expand_times = self.expand_times if training else 1
+        return PathTransformDataset(data, targets, self._build_transforms(training), expand_times=expand_times)
 
     def after_task(self):
         self._known_classes = self._total_classes
@@ -158,8 +165,12 @@ class Learner(BaseLearner):
     def incremental_train(self, data_manager):
         self._reset_task_logging()
         self._cur_task += 1
-        self._total_classes = self._known_classes + data_manager.get_task_size(self._cur_task)
-        self._network.update_fc(self._total_classes - self._known_classes)
+        task_size = data_manager.get_task_size(self._cur_task)
+        self._total_classes = self._known_classes + task_size
+        if self._network.fc is None:
+            self._network.fc = SimpleContinualLinear(self._network.feature_dim, task_size)
+        else:
+            self._network.fc.update(task_size, freeze_old=True)
         logging.info("Learning on %s-%s", self._known_classes, self._total_classes)
 
         current_indices = np.arange(self._known_classes, self._total_classes)
@@ -329,6 +340,7 @@ class Learner(BaseLearner):
         self._network.fc.to(self._device)
         optimizer = self._make_optimizer()
         scheduler = self._make_scheduler(optimizer)
+        scaler = GradScaler(enabled=self.use_amp and self._device.type == "cuda")
 
         prog_bar = tqdm(range(self.epochs))
         for _, epoch in enumerate(prog_bar):
@@ -340,17 +352,23 @@ class Learner(BaseLearner):
                 inputs = inputs.to(self._device)
                 targets = targets.to(self._device)
 
-                outputs = self._network.backbone(inputs, train=True)
-                logits = self._network.fc(outputs["features"])["logits"]
-                loss = self._classification_loss(logits, targets)
-
-                moe_loss = outputs.get("moe_loss")
-                if moe_loss is not None:
-                    loss = loss + self.moe_impt_coef * moe_loss
-
                 optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+                with torch.autocast(
+                    device_type=self._device.type,
+                    dtype=torch.float16,
+                    enabled=self.use_amp and self._device.type == "cuda",
+                ):
+                    outputs = self._network.backbone(inputs, train=True)
+                    logits = self._network.fc(outputs["features"])["logits"]
+                    loss = self._classification_loss(logits, targets)
+
+                    moe_loss = outputs.get("moe_loss")
+                    if moe_loss is not None:
+                        loss = loss + self.moe_impt_coef * moe_loss
+
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
                 losses += loss.item()
 
                 preds = torch.max(logits[:, : self._total_classes], dim=1)[1]
@@ -384,8 +402,13 @@ class Learner(BaseLearner):
         for _, inputs, targets in loader:
             inputs = inputs.to(self._device)
             with torch.no_grad():
-                features = self._network.backbone(inputs, train=False)["features"]
-                outputs = self._network.fc(features)["logits"][:, : self._total_classes]
+                with torch.autocast(
+                    device_type=self._device.type,
+                    dtype=torch.float16,
+                    enabled=self.use_amp and self._device.type == "cuda",
+                ):
+                    features = self._network.backbone(inputs, train=False)["features"]
+                    outputs = self._network.fc(features)["logits"][:, : self._total_classes]
             predicts = torch.topk(outputs, k=self.topk, dim=1, largest=True, sorted=True)[1]
             y_pred.append(predicts.cpu().numpy())
             y_true.append(targets.cpu().numpy())
@@ -397,7 +420,12 @@ class Learner(BaseLearner):
         with torch.no_grad():
             for _, inputs, _targets in loader:
                 inputs = inputs.to(self._device)
-                features = self._network.backbone(inputs, train=False)["features"]
+                with torch.autocast(
+                    device_type=self._device.type,
+                    dtype=torch.float16,
+                    enabled=self.use_amp and self._device.type == "cuda",
+                ):
+                    features = self._network.backbone(inputs, train=False)["features"]
                 vectors.append(tensor2numpy(features))
                 targets.append(_targets.numpy())
         return np.concatenate(vectors), np.concatenate(targets)
