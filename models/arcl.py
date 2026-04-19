@@ -301,13 +301,11 @@ class Learner(BaseLearner):
                 scaler.scale(loss).backward()
                 update_factor_map = self._build_update_factor_map(inputs.shape[0]) if self._cur_task > 0 else {}
 
+                optimizer_step_kwargs = {}
                 if isinstance(optimizer, ARCLModAdam):
-                    scaler.unscale_(optimizer)
-                    optimizer.step(update_factor_map=update_factor_map if self.use_update_scaling else None)
-                    scaler.update()
-                else:
-                    scaler.step(optimizer)
-                    scaler.update()
+                    optimizer_step_kwargs["update_factor_map"] = update_factor_map if self.use_update_scaling else None
+                scaler.step(optimizer, **optimizer_step_kwargs)
+                scaler.update()
 
                 losses += loss.item()
                 preds = task_logits.argmax(dim=1) + self._known_classes
