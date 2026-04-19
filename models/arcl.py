@@ -216,7 +216,15 @@ class Learner(BaseLearner):
                 with _autocast_context(enabled=self.use_amp and torch.cuda.is_available()):
                     logits = self._network(inputs)["logits"]
                     task_logits = logits[:, self._known_classes : self._total_classes]
-                    loss = criterion(task_logits / self.temperature, targets - self._known_classes)
+                loss = criterion(task_logits.float() / self.temperature, targets - self._known_classes)
+                if not torch.isfinite(loss):
+                    logits_min = float(task_logits.detach().amin().item())
+                    logits_max = float(task_logits.detach().amax().item())
+                    raise FloatingPointError(
+                        "Non-finite loss detected in ARCL "
+                        f"(task={self._cur_task}, epoch={epoch + 1}, "
+                        f"logit_range=[{logits_min:.4f}, {logits_max:.4f}])"
+                    )
 
                 scaler.scale(loss).backward()
                 update_factor_map = self._build_update_factor_map(inputs.shape[0]) if self._cur_task > 0 else {}
@@ -297,29 +305,35 @@ class Learner(BaseLearner):
 
         for block_idx, block in enumerate(self._network.backbone.blocks):
             layer_mask = torch.cat([cls_prefix, self.old_avg_attn_map[block_idx]], dim=0).view(1, 1, -1, 1)
-
             attn = block.attn.attn.detach()
             grad_attn = block.attn.attn_no_softmax.grad.detach()
-            attn = attn * layer_mask
-            grad_attn = grad_attn * layer_mask
-
-            q = block.attn.q
             k = block.attn.k
             q_scaled = block.attn.q_scaled
             inp = block.attn.input
             out_grad = block.attn.out.grad.detach()
 
+            attn = attn * layer_mask.to(attn.dtype)
+            grad_attn = grad_attn * layer_mask.to(grad_attn.dtype)
+
+            act_dtype = k.dtype
+            inp_flat = inp.to(act_dtype).reshape(batch_size * inp.shape[1], -1)
+            grad_attn = grad_attn.to(act_dtype)
+            k = k.to(act_dtype)
+            q_scaled = q_scaled.to(act_dtype)
+
             q_grad = (grad_attn @ k) * block.attn.scale
             q_grad = q_grad.transpose(1, 2).reshape(batch_size * inp.shape[1], -1)
-            q_weight_grad = q_grad.T @ inp.reshape(batch_size * inp.shape[1], -1)
+            q_weight_grad = (q_grad.T @ inp_flat).to(block.attn.q_proj.weight.grad.dtype)
 
             k_grad = grad_attn.transpose(-2, -1) @ q_scaled
             k_grad = k_grad.transpose(1, 2).reshape(batch_size * inp.shape[1], -1)
-            k_weight_grad = k_grad.T @ inp.reshape(batch_size * inp.shape[1], -1)
+            k_weight_grad = (k_grad.T @ inp_flat).to(block.attn.k_proj.weight.grad.dtype)
 
-            v_grad = (out_grad.transpose(-2, -1) @ attn.to(out_grad.dtype)).transpose(-2, -1)
+            attn = attn.to(out_grad.dtype)
+            inp_flat_v = inp.to(out_grad.dtype).reshape(batch_size * inp.shape[1], -1)
+            v_grad = (out_grad.transpose(-2, -1) @ attn).transpose(-2, -1)
             v_grad = v_grad.transpose(1, 2).reshape(batch_size * inp.shape[1], -1)
-            v_weight_grad = v_grad.T @ inp.reshape(batch_size * inp.shape[1], -1)
+            v_weight_grad = (v_grad.T @ inp_flat_v).to(block.attn.v_proj.weight.grad.dtype)
 
             update_factor_map[id(block.attn.q_proj.weight)] = self._safe_ratio(q_weight_grad, block.attn.q_proj.weight.grad)
             update_factor_map[id(block.attn.k_proj.weight)] = self._safe_ratio(k_weight_grad, block.attn.k_proj.weight.grad)

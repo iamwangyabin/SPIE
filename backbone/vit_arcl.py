@@ -31,11 +31,10 @@ class Attention(nn.Module):
 
     def forward(self, x):
         batch_size, seq_len, dim = x.shape
-        self.input = x.detach()
-
         q = self._shape(self.q_proj(x), seq_len, batch_size)
         k = self._shape(self.k_proj(x), seq_len, batch_size)
         v = self._shape(self.v_proj(x), seq_len, batch_size)
+        self.input = x.detach().to(q.dtype)
 
         self.q = q.detach()
         self.k = k.detach()
