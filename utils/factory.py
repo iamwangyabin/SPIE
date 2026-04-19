@@ -18,6 +18,8 @@ def get_model(model_name, args):
         from models.spie_v17 import Learner
     elif name == "ka_prompt":
         from models.ka_prompt import Learner
+    elif name == "mqmk":
+        from models.mqmk import Learner
     elif name == "onlymax":
         from models.onlymax import Learner
     elif name == "min":
@@ -31,6 +33,6 @@ def get_model(model_name, args):
     else:
         raise ValueError(
             "Supported model names are 'tuna', 'tunamax', 'spie_v13', 'spie_v14', 'spie_v15', 'spie_v16', 'spie_v17', 'spie_v18', "
-            "'ka_prompt', 'onlymax', 'min', 'min_ablation', 'moal', and 'mos'."
+            "'ka_prompt', 'mqmk', 'onlymax', 'min', 'min_ablation', 'moal', and 'mos'."
         )
     return Learner(args)

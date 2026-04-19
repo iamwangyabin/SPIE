@@ -372,6 +372,45 @@ def get_backbone(args, pretrained=False):
             use_prompt_mask=args.get("use_prompt_mask", True),
         )
         return model
+    elif "_mqmk" in name:
+        from backbone import mqmk
+
+        if "mqmk_base_model" in args:
+            basic_model_name = args["mqmk_base_model"]
+        elif name == "vit_base_patch16_224_mqmk":
+            basic_model_name = "vit_base_patch16_224"
+        elif name == "vit_base_patch16_224_in21k_mqmk":
+            basic_model_name = "vit_base_patch16_224_in21k"
+        else:
+            raise NotImplementedError("Unknown type {}".format(name))
+
+        class_per_task = args.get("increment", max(args.get("nb_classes", 0) // max(args.get("nb_tasks", 1), 1), 1))
+        model = mqmk.MQMKBackbone(
+            model_name=basic_model_name,
+            pretrained=args.get("pretrained", True),
+            pool_size=args.get("pool_size", args.get("nb_tasks", 1)),
+            prompt_length=args.get("prompt_length", args.get("length", 90)),
+            top_k=args.get("mq_top_k", args.get("top_k", 1)),
+            embedding_key=args.get("embedding_key", "cls"),
+            prompt_init=args.get("prompt_init", "uniform"),
+            prompt_key=args.get("prompt_key", True),
+            prompt_key_init=args.get("prompt_key_init", "uniform"),
+            batchwise_prompt=args.get("batchwise_prompt", False),
+            use_prompt_mask=args.get("use_prompt_mask", True),
+            use_g_prompt=args.get("use_g_prompt", True),
+            g_prompt_length=args.get("g_prompt_length", 5),
+            g_prompt_layer_idx=args.get("g_prompt_layer_idx", [0, 1]),
+            use_e_prompt=args.get("use_e_prompt", True),
+            e_prompt_layer_idx=args.get("e_prompt_layer_idx", [2, 3, 4]),
+            same_key_value=args.get("same_key_value", False),
+            multi_query=args.get("multi_query", True),
+            multi_key=args.get("multi_key", True),
+            k_key=args.get("k_key", 1),
+            class_group=args.get("class_group", 1),
+            class_per_task=class_per_task,
+            perfect_match=args.get("perfect_match", False),
+        )
+        return model
     elif '_tunamax' in name:
         ffn_num = 16
         from backbone import vit_tunamax
