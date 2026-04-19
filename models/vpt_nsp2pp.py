@@ -7,8 +7,8 @@ import numpy as np
 import scipy.ndimage
 import torch
 from PIL import Image
+from torch.amp import GradScaler
 from torch import Tensor, nn, optim
-from torch.cuda.amp import GradScaler
 from torch.distributions.multivariate_normal import MultivariateNormal
 from torch.nn import functional as F
 from torch.utils.data import DataLoader, Dataset
@@ -146,8 +146,8 @@ class Learner(BaseLearner):
         self._update_projection_dict = {}
         self._old_importance_dict = None
         self._mask_dict = {}
-        self._class_means: Dict[int, Tensor] = {}
-        self._class_covs: Dict[int, Tensor] = {}
+        self._class_mean_tensors: Dict[int, Tensor] = {}
+        self._class_cov_tensors: Dict[int, Tensor] = {}
 
         self._configure_trainable_parameters()
         total_params = sum(p.numel() for p in self._network.backbone.parameters())
@@ -435,6 +435,23 @@ class Learner(BaseLearner):
         scale_tril = torch.linalg.cholesky(covariance + eye * max(jitter, 1e-3)).to(dtype=torch.float32)
         return MultivariateNormal(mean, scale_tril=scale_tril)
 
+    def _refresh_class_means_matrix(self):
+        if len(self._class_mean_tensors) == 0:
+            if hasattr(self, "_class_means"):
+                delattr(self, "_class_means")
+            return
+
+        matrix = np.zeros((self._total_classes, self.feature_dim), dtype=np.float32)
+        for class_idx in range(self._total_classes):
+            if class_idx not in self._class_mean_tensors:
+                continue
+            vector = self._class_mean_tensors[class_idx].detach().cpu().numpy().astype(np.float32)
+            norm = np.linalg.norm(vector)
+            if norm > 0:
+                vector = vector / norm
+            matrix[class_idx] = vector
+        self._class_means = matrix
+
     @torch.no_grad()
     def _extract_task_class_stats(self):
         self._network.backbone.eval()
@@ -446,11 +463,12 @@ class Learner(BaseLearner):
                 inputs = inputs.to(self._device)
                 features.append(self._network.backbone(inputs, train=False)["features"])
             features = torch.cat(features, dim=0)
-            self._class_means[class_idx] = features.mean(dim=0).detach()
-            self._class_covs[class_idx] = torch.cov(features.T) + torch.eye(features.shape[-1], device=features.device) * 1e-4
+            self._class_mean_tensors[class_idx] = features.mean(dim=0).detach()
+            self._class_cov_tensors[class_idx] = torch.cov(features.T) + torch.eye(features.shape[-1], device=features.device) * 1e-4
+        self._refresh_class_means_matrix()
 
     def _refine_classifier(self):
-        if not self.refine_head or self._cur_task < 0 or len(self._class_means) == 0:
+        if not self.refine_head or self._cur_task < 0 or len(self._class_mean_tensors) == 0:
             return
         for param in self._network.fc.parameters():
             param.requires_grad = True
@@ -465,7 +483,7 @@ class Learner(BaseLearner):
             sample_feats = []
             sample_targets = []
             for class_idx in seen_classes:
-                dist = self._build_safe_distribution(self._class_means[class_idx], self._class_covs[class_idx])
+                dist = self._build_safe_distribution(self._class_mean_tensors[class_idx], self._class_cov_tensors[class_idx])
                 feats = dist.sample((self.refine_samples_per_class,))
                 tgts = torch.full((self.refine_samples_per_class,), class_idx, dtype=torch.long, device=self._device)
                 sample_feats.append(feats)
@@ -526,7 +544,7 @@ class Learner(BaseLearner):
         self._network.to(self._device)
         optimizer = self._make_optimizer()
         scheduler = self._make_scheduler(optimizer)
-        scaler = GradScaler(enabled=self.use_amp and self._device.type == "cuda")
+        scaler = GradScaler(device="cuda", enabled=self.use_amp and self._device.type == "cuda")
 
         prog_bar = tqdm(range(self.epochs))
         for epoch in prog_bar:
