@@ -36,9 +36,11 @@ def get_model(model_name, args):
         from models.consistent_moe_prompt import Learner
     elif name == "arcl":
         from models.arcl import Learner
+    elif name == "vpt_nsp2pp":
+        from models.vpt_nsp2pp import Learner
     else:
         raise ValueError(
             "Supported model names are 'tuna', 'tunamax', 'spie_v13', 'spie_v14', 'spie_v15', 'spie_v16', 'spie_v17', 'spie_v18', 'spie_v19', "
-            "'ka_prompt', 'mqmk', 'onlymax', 'min', 'min_ablation', 'moal', 'mos', 'consistent_moe_prompt', and 'arcl'."
+            "'ka_prompt', 'mqmk', 'onlymax', 'min', 'min_ablation', 'moal', 'mos', 'consistent_moe_prompt', 'arcl', and 'vpt_nsp2pp'."
         )
     return Learner(args)
