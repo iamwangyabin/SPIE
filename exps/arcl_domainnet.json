@@ -14,12 +14,12 @@
     "backbone_type": "pretrained_vit_b16_224_in21k_arcl",
     "device": ["0"],
     "seed": [2025],
-    "swanlab": false,
+    "swanlab": true,
     "pretrained": true,
 
     "epochs": 5,
-    "batch_size": 100,
-    "num_workers": 16,
+    "batch_size": 64,
+    "num_workers": 12,
     "use_amp": true,
     "temperature": 30.0,
 
