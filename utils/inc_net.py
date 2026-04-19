@@ -473,6 +473,27 @@ def get_backbone(args, pretrained=False):
         else:
             raise NotImplementedError("Unknown type {}".format(name))
         return model
+    elif "_consistent_moe_prompt" in name:
+        from backbone import consistent_moe_prompt
+
+        if name == "vit_base_patch16_224_in21k_consistent_moe_prompt":
+            base_model_name = "vit_base_patch16_224.augreg_in21k"
+        elif name == "vit_base_patch16_224_consistent_moe_prompt":
+            base_model_name = "vit_base_patch16_224"
+        else:
+            raise NotImplementedError("Unknown type {}".format(name))
+
+        return consistent_moe_prompt.ConsistentMoEPromptBackbone(
+            model_name=base_model_name,
+            pretrained=args.get("pretrained", True),
+            prompt_len=args.get("prompt_len", 4),
+            prompt_start_block=args.get("prompt_start_block", 0),
+            prompt_end_block=args.get("prompt_end_block", 11),
+            moe_num_experts=args.get("moe_num_experts", 36),
+            moe_topk=args.get("moe_topk", 16),
+            moe_noisy_gating=args.get("moe_noisy_gating", True),
+            moe_frozen_qx_coef=args.get("moe_frozen_qx_coef", 0.0),
+        )
     else:
         raise NotImplementedError("Unknown type {}".format(name))
 
