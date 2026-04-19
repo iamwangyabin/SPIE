@@ -6,7 +6,6 @@ import torch
 from numpy.lib.stride_tricks import sliding_window_view
 from scipy.ndimage import gaussian_filter
 from torch import nn, optim
-from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -20,6 +19,26 @@ from backbone.vit_arcl import (
 from models.base import BaseLearner
 from utils.mod_adam_arcl import ARCLModAdam
 from utils.toolkit import tensor2numpy
+
+try:
+    from torch.amp import GradScaler as TorchGradScaler
+    from torch.amp import autocast as torch_autocast
+
+    def _make_grad_scaler(enabled):
+        return TorchGradScaler("cuda", enabled=enabled)
+
+    def _autocast_context(enabled):
+        return torch_autocast("cuda", dtype=torch.float16, enabled=enabled)
+
+except ImportError:
+    from torch.cuda.amp import GradScaler as TorchGradScaler
+    from torch.cuda.amp import autocast as torch_autocast
+
+    def _make_grad_scaler(enabled):
+        return TorchGradScaler(enabled=enabled)
+
+    def _autocast_context(enabled):
+        return torch_autocast(dtype=torch.float16, enabled=enabled)
 
 
 def _get_optimizer(name, params, lr, weight_decay):
@@ -172,7 +191,7 @@ class Learner(BaseLearner):
         optimizer = _get_optimizer(self.optimizer_type, param_groups, self.lr, self.weight_decay)
         scheduler = _get_scheduler(self.scheduler_type, optimizer, self.epochs, self.min_lr)
         criterion = nn.CrossEntropyLoss()
-        scaler = GradScaler(enabled=self.use_amp and torch.cuda.is_available())
+        scaler = _make_grad_scaler(enabled=self.use_amp and torch.cuda.is_available())
 
         if self.avg_attn_map is None:
             num_layers = len(self._network.backbone.blocks)
@@ -194,7 +213,7 @@ class Learner(BaseLearner):
                 inputs = inputs.to(self._device)
                 targets = targets.to(self._device)
                 optimizer.zero_grad()
-                with autocast(device_type="cuda", dtype=torch.float16, enabled=self.use_amp and torch.cuda.is_available()):
+                with _autocast_context(enabled=self.use_amp and torch.cuda.is_available()):
                     logits = self._network(inputs)["logits"]
                     task_logits = logits[:, self._known_classes : self._total_classes]
                     loss = criterion(task_logits / self.temperature, targets - self._known_classes)
