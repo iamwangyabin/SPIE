@@ -62,10 +62,10 @@ class ExperimentLogger:
         group = args.get("swanlab_group") or self._default_group(args)
         name = args.get("swanlab_experiment_name") or args.get("swanlab_name") or self._default_run_name(args)
         tags = args.get("swanlab_tags", [])
-        project = args.get("swanlab_project")
+        project = args.get("swanlab_project") or self._default_project_name(args)
 
         init_kwargs = {
-            "project": "CIL",
+            "project": project,
             "config": config,
             "group": group,
             "experiment_name": name,

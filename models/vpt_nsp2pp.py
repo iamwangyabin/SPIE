@@ -108,6 +108,8 @@ class Learner(BaseLearner):
 
         self.batch_size = int(args.get("batch_size", 128))
         self.eval_batch_size = int(args.get("eval_batch_size", 100))
+        self.num_workers = int(args.get("num_workers", num_workers))
+        self.eval_workers = int(args.get("eval_workers", 2))
         self.epochs = int(args.get("tuned_epoch", 10))
         self.init_lr = float(args.get("init_lr", 1e-3))
         self.weight_decay = float(args.get("weight_decay", 5e-5))
@@ -501,7 +503,7 @@ class Learner(BaseLearner):
         self.test_dataset = data_manager.get_dataset(seen_indices, source="test", mode="test")
         self.null_dataset = self._make_eval_like_dataset(data_manager, current_indices, source="train")
 
-        self.train_loader = DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=num_workers)
+        self.train_loader = DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers)
         self.test_loader = DataLoader(self.test_dataset, batch_size=self.eval_batch_size, shuffle=False, num_workers=self.eval_workers)
         self.null_loader = DataLoader(self.null_dataset, batch_size=self.eval_batch_size, shuffle=False, num_workers=self.eval_workers)
 
