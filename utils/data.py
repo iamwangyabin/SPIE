@@ -127,6 +127,13 @@ def build_imagenet_normalize():
     return transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
 
 
+def use_vpt_nsp2pp_official_aug(args):
+    return (
+        args.get("model_name") == "vpt_nsp2pp"
+        and str(args.get("augmentation_protocol", "benchmark")).lower() == "official"
+    )
+
+
 def build_vpt_nsp2pp_transform(is_train):
     bilinear = transforms.InterpolationMode.BILINEAR
     normalize = transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
@@ -240,7 +247,7 @@ class iImageNetR(iData):
         self.args = args
         self.use_path = True
 
-        if args["model_name"] == "vpt_nsp2pp":
+        if use_vpt_nsp2pp_official_aug(args):
             self.train_trsf = build_vpt_nsp2pp_transform(True)
             self.test_trsf = build_vpt_nsp2pp_transform(False)
             self.common_trsf = []
@@ -281,7 +288,7 @@ class iDomainNet(iData):
         self.args = args
         self.use_path = True
 
-        if args["model_name"] == "vpt_nsp2pp":
+        if use_vpt_nsp2pp_official_aug(args):
             self.train_trsf = build_vpt_nsp2pp_transform(True)
             self.test_trsf = build_vpt_nsp2pp_transform(False)
             self.common_trsf = []

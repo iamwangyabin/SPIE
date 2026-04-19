@@ -120,6 +120,7 @@ class Learner(BaseLearner):
         self.args = args
         self._network = VPTNSP2PPNet(args)
         self.dataset_name = str(args.get("dataset", "")).lower()
+        self.augmentation_protocol = str(args.get("augmentation_protocol", "benchmark")).lower()
 
         self.batch_size = int(args.get("batch_size", 240))
         self.eval_batch_size = int(args.get("eval_batch_size", 100))
@@ -183,8 +184,9 @@ class Learner(BaseLearner):
         std = cfg.get("std", (0.229, 0.224, 0.225))
         bilinear = T.InterpolationMode.BILINEAR
         official_image_datasets = {"imagenetr", "domainnet", "sdomainet"}
+        use_official_aug = self.augmentation_protocol == "official" and self.dataset_name in official_image_datasets
         if contrastive:
-            if self.impt_contrast_augment == "autoaug" and self.dataset_name in official_image_datasets:
+            if use_official_aug and self.impt_contrast_augment == "autoaug":
                 return T.Compose(
                     [
                         T.AutoAugment(T.AutoAugmentPolicy.IMAGENET, bilinear),
@@ -194,20 +196,15 @@ class Learner(BaseLearner):
                         T.Normalize(mean, std),
                     ]
                 )
-            ops = []
-            if self.impt_contrast_augment == "autoaug":
-                ops.append(T.AutoAugment(T.AutoAugmentPolicy.IMAGENET, bilinear))
-            ops.extend(
+            return T.Compose(
                 [
                     T.RandomResizedCrop((224, 224), interpolation=bilinear, antialias=True),
-                    T.RandomHorizontalFlip(),
+                    T.RandomHorizontalFlip(p=0.5),
                     T.ToTensor(),
-                    T.Normalize(mean, std),
                 ]
             )
-            return T.Compose(ops)
         if training:
-            if self.dataset_name in official_image_datasets:
+            if use_official_aug:
                 return T.Compose(
                     [
                         T.AutoAugment(T.AutoAugmentPolicy.IMAGENET, bilinear),
@@ -218,18 +215,31 @@ class Learner(BaseLearner):
                 )
             return T.Compose(
                 [
-                    T.RandomResizedCrop((224, 224), interpolation=bilinear, antialias=True),
-                    T.RandomHorizontalFlip(),
+                    T.RandomResizedCrop(
+                        224,
+                        scale=(0.05, 1.0),
+                        ratio=(3.0 / 4.0, 4.0 / 3.0),
+                        interpolation=bilinear,
+                        antialias=True,
+                    ),
+                    T.RandomHorizontalFlip(p=0.5),
+                    T.ToTensor(),
+                ]
+            )
+        if use_official_aug:
+            return T.Compose(
+                [
+                    T.Resize((256, 256), interpolation=bilinear, antialias=True),
+                    T.CenterCrop(224),
                     T.ToTensor(),
                     T.Normalize(mean, std),
                 ]
             )
         return T.Compose(
             [
-                T.Resize((256, 256), interpolation=bilinear, antialias=True),
+                T.Resize(256, interpolation=bilinear, antialias=True),
                 T.CenterCrop(224),
                 T.ToTensor(),
-                T.Normalize(mean, std),
             ]
         )
 

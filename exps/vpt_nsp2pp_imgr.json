@@ -9,10 +9,11 @@
     "increment": 20,
     "model_name": "vpt_nsp2pp",
     "backbone_type": "vit_base_patch16_224.augreg_in21k_vpt_nsp2pp",
+    "augmentation_protocol": "benchmark",
     "device": ["0"],
     "seed": [2025],
     "swanlab": true,
-    "swanlab_project": "SPIE",
+    "swanlab_project": "CIL",
     "swanlab_mode": "online",
 
     "tuned_epoch": 10,
