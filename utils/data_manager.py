@@ -242,7 +242,7 @@ def _get_idata(dataset_name, args=None):
         return iImageNetR(args)
     elif name == "imageneta":
         return iImageNetA()
-    elif name == "domainnet":
+    elif name in {"domainnet", "sdomainet"}:
         return iDomainNet(args)
     elif name == "cub":
         return CUB()

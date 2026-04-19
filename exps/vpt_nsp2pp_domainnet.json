@@ -1,6 +1,9 @@
 {
-    "prefix": "vpt-nsp2pp-imagenetr",
-    "dataset": "imagenetr",
+    "prefix": "vpt-nsp2pp-domainnet",
+    "dataset": "domainnet",
+    "domainnet_root": "./data/domainnet",
+    "domainnet_train_txt": "./utils/datautils/domainnet/train.txt",
+    "domainnet_test_txt": "./utils/datautils/domainnet/test.txt",
     "memory_size": 0,
     "memory_per_class": 0,
     "fixed_memory": false,

@@ -127,6 +127,26 @@ def build_imagenet_normalize():
     return transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
 
 
+def build_vpt_nsp2pp_transform(is_train):
+    bilinear = transforms.InterpolationMode.BILINEAR
+    normalize = transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
+
+    if is_train:
+        return [
+            transforms.AutoAugment(transforms.AutoAugmentPolicy.IMAGENET, interpolation=bilinear),
+            transforms.RandomResizedCrop(224, interpolation=bilinear, antialias=True),
+            transforms.ToTensor(),
+            normalize,
+        ]
+
+    return [
+        transforms.Resize((256, 256), interpolation=bilinear, antialias=True),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+        normalize,
+    ]
+
+
 class iCIFAR224(iData):
     def __init__(self, args):
         super().__init__()
@@ -220,7 +240,11 @@ class iImageNetR(iData):
         self.args = args
         self.use_path = True
 
-        if args["model_name"] == "coda_prompt":
+        if args["model_name"] == "vpt_nsp2pp":
+            self.train_trsf = build_vpt_nsp2pp_transform(True)
+            self.test_trsf = build_vpt_nsp2pp_transform(False)
+            self.common_trsf = []
+        elif args["model_name"] == "coda_prompt":
             self.train_trsf = build_transform_coda_prompt(True, args)
             self.test_trsf = build_transform_coda_prompt(False, args)
             self.common_trsf = [
@@ -257,7 +281,11 @@ class iDomainNet(iData):
         self.args = args
         self.use_path = True
 
-        if args["model_name"] == "coda_prompt":
+        if args["model_name"] == "vpt_nsp2pp":
+            self.train_trsf = build_vpt_nsp2pp_transform(True)
+            self.test_trsf = build_vpt_nsp2pp_transform(False)
+            self.common_trsf = []
+        elif args["model_name"] == "coda_prompt":
             self.train_trsf = build_transform_coda_prompt(True, args)
             self.test_trsf = build_transform_coda_prompt(False, args)
             self.common_trsf = []

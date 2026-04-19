@@ -68,6 +68,20 @@ class ContrastiveDataset(Dataset):
         return self.transform(image), int(self.labels[idx])
 
 
+class RepeatedDataset(Dataset):
+    def __init__(self, dataset, repeat: int):
+        if repeat < 1:
+            raise ValueError(f"repeat must be >= 1, got {repeat}")
+        self.dataset = dataset
+        self.repeat = int(repeat)
+
+    def __len__(self):
+        return len(self.dataset) * self.repeat
+
+    def __getitem__(self, idx):
+        return self.dataset[idx % len(self.dataset)]
+
+
 class VPTNSP2PPNet(nn.Module):
     def __init__(self, args):
         super().__init__()
@@ -105,13 +119,15 @@ class Learner(BaseLearner):
         super().__init__(args)
         self.args = args
         self._network = VPTNSP2PPNet(args)
+        self.dataset_name = str(args.get("dataset", "")).lower()
 
-        self.batch_size = int(args.get("batch_size", 128))
+        self.batch_size = int(args.get("batch_size", 240))
         self.eval_batch_size = int(args.get("eval_batch_size", 100))
-        self.num_workers = int(args.get("num_workers", num_workers))
+        self.num_workers = int(args.get("workers", args.get("num_workers", 16)))
         self.eval_workers = int(args.get("eval_workers", 2))
-        self.epochs = int(args.get("tuned_epoch", 10))
-        self.init_lr = float(args.get("init_lr", 1e-3))
+        self.epochs = int(args.get("epochs", args.get("tuned_epoch", 10)))
+        self.expand_times = int(args.get("expand_times", 10))
+        self.init_lr = float(args.get("lr", args.get("init_lr", 1e-2)))
         self.weight_decay = float(args.get("weight_decay", 5e-5))
         self.min_lr = float(args.get("min_lr", 1e-5))
         self.temperature = float(args.get("temperature", 30.0))
@@ -138,9 +154,9 @@ class Learner(BaseLearner):
         self.impt_contrast_augment = args.get("impt_contrast_augment", "autoaug")
 
         self.refine_head = bool(args.get("refine_head", False))
-        self.refine_epochs = int(args.get("refine_epochs", 20))
+        self.refine_epochs = int(args.get("refine_epochs", 50))
         self.refine_lr = float(args.get("refine_lr", 1e-3))
-        self.refine_samples_per_class = int(args.get("refine_samples_per_class", 64))
+        self.refine_samples_per_class = int(args.get("refine_samples_per_class", 256))
 
         self._cached_interm_tensor_dict = {}
         self._update_projection_dict = {}
@@ -166,7 +182,18 @@ class Learner(BaseLearner):
         mean = cfg.get("mean", (0.485, 0.456, 0.406))
         std = cfg.get("std", (0.229, 0.224, 0.225))
         bilinear = T.InterpolationMode.BILINEAR
+        official_image_datasets = {"imagenetr", "domainnet", "sdomainet"}
         if contrastive:
+            if self.impt_contrast_augment == "autoaug" and self.dataset_name in official_image_datasets:
+                return T.Compose(
+                    [
+                        T.AutoAugment(T.AutoAugmentPolicy.IMAGENET, bilinear),
+                        T.Resize((256, 256), interpolation=bilinear, antialias=True),
+                        T.CenterCrop(224),
+                        T.ToTensor(),
+                        T.Normalize(mean, std),
+                    ]
+                )
             ops = []
             if self.impt_contrast_augment == "autoaug":
                 ops.append(T.AutoAugment(T.AutoAugmentPolicy.IMAGENET, bilinear))
@@ -180,6 +207,15 @@ class Learner(BaseLearner):
             )
             return T.Compose(ops)
         if training:
+            if self.dataset_name in official_image_datasets:
+                return T.Compose(
+                    [
+                        T.AutoAugment(T.AutoAugmentPolicy.IMAGENET, bilinear),
+                        T.RandomResizedCrop((224, 224), interpolation=bilinear, antialias=True),
+                        T.ToTensor(),
+                        T.Normalize(mean, std),
+                    ]
+                )
             return T.Compose(
                 [
                     T.RandomResizedCrop((224, 224), interpolation=bilinear, antialias=True),
@@ -236,14 +272,14 @@ class Learner(BaseLearner):
         raise ValueError(f"Unsupported optimizer: {optimizer_name}")
 
     def _make_scheduler(self, optimizer):
-        scheduler_name = self.args.get("scheduler", "cosine")
+        scheduler_name = str(self.args.get("lr_sch", self.args.get("scheduler", "multistep"))).lower()
         if scheduler_name == "cosine":
             return optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.epochs, eta_min=self.min_lr)
-        if scheduler_name == "steplr":
+        if scheduler_name in {"steplr", "multistep"}:
             return optim.lr_scheduler.MultiStepLR(
                 optimizer,
-                milestones=self.args.get("init_milestones", [5, 8]),
-                gamma=self.args.get("init_lr_decay", 0.1),
+                milestones=self.args.get("decay_milestones", self.args.get("init_milestones", [5, 8])),
+                gamma=self.args.get("decay_rate", self.args.get("init_lr_decay", 0.1)),
             )
         if scheduler_name == "constant":
             return None
@@ -517,7 +553,8 @@ class Learner(BaseLearner):
         current_indices = np.arange(self._known_classes, self._total_classes)
         seen_indices = np.arange(0, self._total_classes)
 
-        self.train_dataset = data_manager.get_dataset(current_indices, source="train", mode="train")
+        base_train_dataset = data_manager.get_dataset(current_indices, source="train", mode="train")
+        self.train_dataset = RepeatedDataset(base_train_dataset, self.expand_times)
         self.test_dataset = data_manager.get_dataset(seen_indices, source="test", mode="test")
         self.null_dataset = self._make_eval_like_dataset(data_manager, current_indices, source="train")
 
