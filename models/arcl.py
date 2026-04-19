@@ -3,8 +3,10 @@ from typing import List
 
 import numpy as np
 import torch
+from numpy.lib.stride_tricks import sliding_window_view
 from scipy.ndimage import gaussian_filter
 from torch import nn, optim
+from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -21,6 +23,8 @@ from utils.toolkit import tensor2numpy
 
 
 def _get_optimizer(name, params, lr, weight_decay):
+    if name == "mod_adam":
+        return ARCLModAdam(params, lr=lr, weight_decay=weight_decay)
     if name == "sgd":
         return optim.SGD(params, lr=lr, momentum=0.9, weight_decay=weight_decay)
     if name == "adam":
@@ -34,7 +38,9 @@ def _get_scheduler(name, optimizer, epochs, min_lr):
     if name == "cosine":
         return optim.lr_scheduler.CosineAnnealingLR(optimizer=optimizer, T_max=epochs, eta_min=min_lr)
     if name == "step":
-        return optim.lr_scheduler.MultiStepLR(optimizer=optimizer, milestones=[70, 100], gamma=0.1)
+        return optim.lr_scheduler.StepLR(optimizer=optimizer, step_size=epochs, gamma=0.1)
+    if name == "multistep":
+        return None
     if name == "constant":
         return None
     raise ValueError(f"Unknown scheduler: {name}")
@@ -97,14 +103,18 @@ class Learner(BaseLearner):
         self.batch_size = int(args.get("batch_size", 100))
         self.num_workers = int(args.get("num_workers", 8))
         self.epochs = int(args.get("epochs", args.get("tuned_epoch", 5)))
-        self.lr = float(args.get("lr", 1e-4))
-        self.head_lr = float(args.get("head_lr", 1e-2))
+        self.lr = float(args.get("lr", args.get("init_lr", 1e-2)))
         self.weight_decay = float(args.get("weight_decay", 5e-5))
         self.min_lr = float(args.get("min_lr", 1e-5))
-        self.optimizer_type = args.get("optimizer", "adam").lower()
-        self.scheduler_type = args.get("scheduler", "cosine").lower()
-        self.temperature = float(args.get("temperature", 1.0))
+        self.optimizer_type = args.get("optimizer", "mod_adam").lower()
+        self.scheduler_type = args.get("lr_sch", args.get("scheduler", "multistep")).lower()
+        self.temperature = float(args.get("temperature", 30.0))
         self.use_update_scaling = bool(args.get("use_update_scaling", True))
+        self.use_amp = bool(args.get("use_amp", True))
+        self.lr_scale = float(args.get("lr_scale", 0.01))
+        self.lr_scale_patterns = tuple(args.get("lr_scale_patterns", ["qkv"]))
+        self.decay_milestones = list(args.get("decay_milestones", [5, 8]))
+        self.decay_rate = float(args.get("decay_rate", 0.1))
 
         self.old_avg_attn_map = None
         self.avg_attn_map = None
@@ -144,7 +154,7 @@ class Learner(BaseLearner):
 
     def _train_task(self, train_loader):
         self._network.to(self._device)
-        self._network.train()
+        self._set_trainable_state()
 
         qkv_params = []
         for name, param in self._network.backbone.named_parameters():
@@ -158,16 +168,11 @@ class Learner(BaseLearner):
             head.requires_grad_(task_id == self._cur_task)
 
         head_params = [p for p in self._network.fc.heads[self._cur_task].parameters() if p.requires_grad]
-        optimizer = ARCLModAdam(
-            [
-                {"params": qkv_params, "lr": self.lr, "weight_decay": self.weight_decay},
-                {"params": head_params, "lr": self.head_lr, "weight_decay": self.weight_decay},
-            ],
-            lr=self.lr,
-            weight_decay=self.weight_decay,
-        )
+        param_groups = self._build_param_groups(qkv_params, head_params)
+        optimizer = _get_optimizer(self.optimizer_type, param_groups, self.lr, self.weight_decay)
         scheduler = _get_scheduler(self.scheduler_type, optimizer, self.epochs, self.min_lr)
         criterion = nn.CrossEntropyLoss()
+        scaler = GradScaler(enabled=self.use_amp and torch.cuda.is_available())
 
         if self.avg_attn_map is None:
             num_layers = len(self._network.backbone.blocks)
@@ -176,24 +181,34 @@ class Learner(BaseLearner):
 
         prog_bar = tqdm(range(self.epochs))
         for epoch in prog_bar:
+            if self.scheduler_type == "multistep":
+                self._step_multistep_scheduler(optimizer, epoch)
+            elif scheduler is not None and epoch == 0:
+                scheduler.step(0)
+
             losses = 0.0
             correct, total = 0, 0
-            rollout_batch_maps: List[torch.Tensor] = []
+            rollout_batch_maps = []
 
             for _, inputs, targets in train_loader:
                 inputs = inputs.to(self._device)
                 targets = targets.to(self._device)
-                logits = self._network(inputs)["logits"]
-                task_logits = logits[:, self._known_classes : self._total_classes]
-                loss = criterion(task_logits / self.temperature, targets - self._known_classes)
-
                 optimizer.zero_grad()
-                loss.backward()
-                update_factor_map = self._build_update_factor_map(inputs.shape[0]) if self._cur_task > 0 else {}
-                optimizer.step(update_factor_map=update_factor_map if self.use_update_scaling else None)
+                with autocast(device_type="cuda", dtype=torch.float16, enabled=self.use_amp and torch.cuda.is_available()):
+                    logits = self._network(inputs)["logits"]
+                    task_logits = logits[:, self._known_classes : self._total_classes]
+                    loss = criterion(task_logits / self.temperature, targets - self._known_classes)
 
-                if self._cur_task == 0 or not self.use_update_scaling:
-                    pass
+                scaler.scale(loss).backward()
+                update_factor_map = self._build_update_factor_map(inputs.shape[0]) if self._cur_task > 0 else {}
+
+                if isinstance(optimizer, ARCLModAdam):
+                    scaler.unscale_(optimizer)
+                    optimizer.step(update_factor_map=update_factor_map if self.use_update_scaling else None)
+                    scaler.update()
+                else:
+                    scaler.step(optimizer)
+                    scaler.update()
 
                 losses += loss.item()
                 preds = task_logits.argmax(dim=1) + self._known_classes
@@ -201,10 +216,10 @@ class Learner(BaseLearner):
                 total += len(targets)
 
                 if epoch == self.epochs - 1:
-                    rollout_batch_maps.extend(self._collect_rollout_maps())
+                    rollout_batch_maps.extend(self._collect_rollout_maps(targets))
 
             if scheduler is not None:
-                scheduler.step()
+                scheduler.step(epoch + 1)
 
             train_acc = np.around(tensor2numpy(correct) * 100 / total, decimals=2)
             avg_loss = losses / len(train_loader)
@@ -222,6 +237,37 @@ class Learner(BaseLearner):
 
             if epoch == self.epochs - 1:
                 self._update_attention_statistics(rollout_batch_maps)
+
+    def _set_trainable_state(self):
+        self._network.eval()
+        self._network.backbone.eval()
+        for block in self._network.backbone.blocks:
+            block.attn.train()
+        for task_id, head in enumerate(self._network.fc.heads):
+            if task_id == self._cur_task:
+                head.train()
+            else:
+                head.eval()
+
+    def _build_param_groups(self, qkv_params, head_params):
+        scaled_patterns = set()
+        for pattern in self.lr_scale_patterns:
+            if pattern == "qkv":
+                scaled_patterns.update({"q_proj.weight", "k_proj.weight", "v_proj.weight"})
+            else:
+                scaled_patterns.add(pattern)
+
+        qkv_aliases = {"q_proj.weight", "k_proj.weight", "v_proj.weight", "q_proj", "k_proj", "v_proj"}
+        qkv_lr = self.lr * self.lr_scale if any(pattern in qkv_aliases for pattern in scaled_patterns) else self.lr
+        return [
+            {"params": head_params, "lr": self.lr, "weight_decay": self.weight_decay},
+            {"params": qkv_params, "lr": qkv_lr, "weight_decay": self.weight_decay},
+        ]
+
+    def _step_multistep_scheduler(self, optimizer, epoch):
+        lr_scale = self.decay_rate ** sum(epoch >= milestone for milestone in self.decay_milestones)
+        optimizer.param_groups[0]["lr"] = self.lr * lr_scale
+        optimizer.param_groups[1]["lr"] = self.lr * self.lr_scale * lr_scale
 
     def _build_update_factor_map(self, batch_size):
         if self.old_avg_attn_map is None:
@@ -269,7 +315,7 @@ class Learner(BaseLearner):
         ratio = torch.where(torch.isinf(ratio), torch.ones_like(ratio), ratio)
         return ratio.clamp(-10, 10).detach()
 
-    def _collect_rollout_maps(self):
+    def _collect_rollout_maps(self, targets):
         maps = []
         num_layers = len(self._network.backbone.blocks)
         for sample_idx in range(self._network.backbone.blocks[0].attn.attn_clone.shape[0]):
@@ -284,20 +330,45 @@ class Learner(BaseLearner):
             rollout[0] = aug[0]
             for layer_idx in range(1, aug.size(0)):
                 rollout[layer_idx] = aug[layer_idx] @ rollout[layer_idx - 1]
-            maps.append(rollout[:, 0, 1:].detach())
+            maps.append((int(targets[sample_idx].item()), rollout[:, 0, 1:].detach()))
         return maps
 
     def _update_attention_statistics(self, rollout_maps):
         if not rollout_maps:
             return
 
-        for rollout in rollout_maps:
-            rollout_np = rollout.detach().cpu().numpy()
-            binary_mask = []
-            for layer_map in rollout_np:
-                threshold = find_split_point(layer_map)
-                binary_mask.append(torch.as_tensor((layer_map <= threshold).astype(np.float32), device=self._device))
-            self.avg_attn_map += torch.stack(binary_mask, dim=0)
-            self.temp_count += 1
+        data_for_all_class = {}
+        all_rollout_attentions = {}
+        for target, rollout in rollout_maps:
+            if target not in data_for_all_class:
+                data_for_all_class[target] = torch.tensor([], device=self._device)
+                all_rollout_attentions[target] = torch.zeros((0, rollout.shape[0], rollout.shape[1]), device=self._device)
+            all_rollout_attentions[target] = torch.cat(
+                (all_rollout_attentions[target], rollout.reshape(1, rollout.shape[0], rollout.shape[1])),
+                dim=0,
+            )
+            data_for_all_class[target] = torch.cat((data_for_all_class[target], rollout.flatten()))
+
+        for classid in data_for_all_class.keys():
+            data = data_for_all_class[classid].detach().cpu().numpy()
+            data_windows = sliding_window_view(data.reshape(data.shape[0]), rollout_maps[0][1].numel())
+            image_stack = all_rollout_attentions[classid]
+            for sample_idx in range(int(data.shape[0] / rollout_maps[0][1].numel())):
+                data_sample = data_windows[sample_idx].reshape(image_stack.shape[1], image_stack.shape[2])
+                image_sample = image_stack[sample_idx]
+                split_points = [find_split_point(data_sample[layer_idx]) for layer_idx in range(data_sample.shape[0])]
+
+                binary_mask = []
+                for layer_idx in range(data_sample.shape[0]):
+                    binary_mask.append(
+                        torch.where(
+                            image_sample[layer_idx] <= split_points[layer_idx],
+                            torch.tensor(1.0, device=self._device),
+                            torch.tensor(0.0, device=self._device),
+                        )
+                    )
+
+                self.avg_attn_map += torch.stack(binary_mask, dim=0)
+                self.temp_count += 1
 
         self.old_avg_attn_map = (self.avg_attn_map / max(self.temp_count, 1)).detach().clone()
