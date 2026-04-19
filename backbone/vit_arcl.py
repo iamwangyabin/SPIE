@@ -66,6 +66,25 @@ class Attention(nn.Module):
         return out
 
 
+class Mlp(nn.Module):
+    def __init__(self, in_features, hidden_features, out_features=None, act_layer=nn.GELU, drop=0.0):
+        super().__init__()
+        out_features = out_features or in_features
+        self.fc1 = nn.Linear(in_features, hidden_features)
+        self.act = act_layer()
+        self.drop1 = nn.Dropout(drop)
+        self.fc2 = nn.Linear(hidden_features, out_features)
+        self.drop2 = nn.Dropout(drop)
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.act(x)
+        x = self.drop1(x)
+        x = self.fc2(x)
+        x = self.drop2(x)
+        return x
+
+
 class Block(nn.Module):
     def __init__(
         self,
@@ -85,17 +104,11 @@ class Block(nn.Module):
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
         self.norm2 = norm_layer(dim)
         hidden_dim = int(dim * mlp_ratio)
-        self.fc1 = nn.Linear(dim, hidden_dim)
-        self.act = act_layer()
-        self.fc2 = nn.Linear(hidden_dim, dim)
-        self.mlp_drop = nn.Dropout(drop)
+        self.mlp = Mlp(dim, hidden_dim, act_layer=act_layer, drop=drop)
 
     def forward(self, x):
         x = x + self.drop_path(self.attn(self.norm1(x)))
-        residual = x
-        x = self.mlp_drop(self.act(self.fc1(self.norm2(x))))
-        x = self.mlp_drop(self.fc2(x))
-        x = residual + self.drop_path(x)
+        x = x + self.drop_path(self.mlp(self.norm2(x)))
         return x
 
 
@@ -194,7 +207,12 @@ def _load_pretrained(backbone_name, pretrained=True, **kwargs):
                 state_dict[key.replace("qkv.bias", "k_proj.bias")] = qkv_bias[768 : 768 * 2]
                 state_dict[key.replace("qkv.bias", "v_proj.bias")] = qkv_bias[768 * 2 :]
 
-        model.load_state_dict(state_dict, strict=False)
+        incompat = model.load_state_dict(state_dict, strict=False)
+        if incompat.missing_keys or incompat.unexpected_keys:
+            raise RuntimeError(
+                "ARCL pretrained weight mapping mismatch. "
+                f"missing={incompat.missing_keys}, unexpected={incompat.unexpected_keys}"
+            )
     for name, param in model.named_parameters():
         param.requires_grad = any(token in name for token in ("q_proj.weight", "k_proj.weight", "v_proj.weight"))
     return model.eval()
