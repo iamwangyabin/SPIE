@@ -86,6 +86,22 @@ def _build_accuracy_matrix(matrix, labels):
     return acc_matrix
 
 
+def _update_metric_store(store, metric_name, accy):
+    metric_store = store.setdefault(
+        metric_name,
+        {"curve": {"top1": [], "top5": []}, "matrix": [], "labels": []},
+    )
+
+    grouped = accy.get("grouped", {})
+    keys = [key for key in grouped.keys() if '-' in key]
+    values = [grouped[key] for key in keys]
+    metric_store["matrix"].append(values)
+    metric_store["labels"] = keys
+    metric_store["curve"]["top1"].append(accy["top1"])
+    metric_store["curve"]["top5"].append(accy["top5"])
+    return metric_store
+
+
 def train(args):
     seed_list = copy.deepcopy(args["seed"])
     device = copy.deepcopy(args["device"])
@@ -138,6 +154,7 @@ def _train(args):
     cnn_curve, nme_curve = {"top1": [], "top5": []}, {"top1": [], "top5": []}
     cnn_matrix, nme_matrix = [], []
     cnn_matrix_labels, nme_matrix_labels = [], []
+    eval_variant_store = {}
 
     try:
         for task in range(data_manager.nb_tasks):
@@ -153,14 +170,18 @@ def _train(args):
             experiment_logger.log_extra_history(task, task_logging["extra_history"])
 
             cnn_accy, nme_accy = model.eval_task()
+            eval_variants = model.consume_eval_variants() if hasattr(model, "consume_eval_variants") else None
             model.after_task()
+            checkpoint_extra = {
+                "cnn_accy": _to_builtin(cnn_accy),
+                "nme_accy": _to_builtin(nme_accy),
+                "task_id": task,
+            }
+            if eval_variants is not None:
+                checkpoint_extra["eval_variants"] = _to_builtin(eval_variants)
             model.save_checkpoint(
                 os.path.join(checkpoint_dir, "task"),
-                extra={
-                    "cnn_accy": _to_builtin(cnn_accy),
-                    "nme_accy": _to_builtin(nme_accy),
-                    "task_id": task,
-                },
+                extra=checkpoint_extra,
             )
             logging.info(
                 "Saved checkpoint: %s",
@@ -221,12 +242,27 @@ def _train(args):
                 print("Average Accuracy (CNN):", "{:.2f}".format(avg_cnn))
                 logging.info("Average Accuracy (CNN): {:.2f} \n".format(avg_cnn))
 
+            avg_variant_top1 = {}
+            if eval_variants:
+                for variant_name, variant_accy in eval_variants.items():
+                    metric_store = _update_metric_store(eval_variant_store, variant_name, variant_accy)
+                    avg_variant_top1[variant_name] = _average_float(metric_store["curve"]["top1"])
+                    logging.info("%s: %s", variant_name, _to_builtin(variant_accy["grouped"]))
+                    logging.info("%s top1 curve: %s", variant_name, _to_builtin(metric_store["curve"]["top1"]))
+                    logging.info("%s top5 curve: %s", variant_name, _to_builtin(metric_store["curve"]["top5"]))
+                    logging.info("Average Accuracy (%s): %.2f", variant_name, avg_variant_top1[variant_name])
+
             experiment_logger.log_eval(
                 cnn_accy=cnn_accy,
                 nme_accy=nme_accy,
                 step=task,
                 avg_cnn=avg_cnn,
                 avg_nme=avg_nme,
+            )
+            experiment_logger.log_eval_variants(
+                eval_variants=eval_variants,
+                step=task,
+                avg_variants=avg_variant_top1 if eval_variants else None,
             )
 
         summary_metrics = {}
@@ -236,6 +272,10 @@ def _train(args):
         if nme_curve["top1"]:
             summary_metrics["summary/nme/final_top1"] = nme_curve["top1"][-1]
             summary_metrics["summary/nme/final_avg_top1"] = _average_float(nme_curve["top1"])
+        for variant_name, metric_store in eval_variant_store.items():
+            if metric_store["curve"]["top1"]:
+                summary_metrics[f"summary/{variant_name}/final_top1"] = metric_store["curve"]["top1"][-1]
+                summary_metrics[f"summary/{variant_name}/final_avg_top1"] = _average_float(metric_store["curve"]["top1"])
 
         cnn_accuracy_matrix = _build_accuracy_matrix(cnn_matrix, cnn_matrix_labels)
         if cnn_accuracy_matrix is not None:
@@ -244,6 +284,10 @@ def _train(args):
         nme_accuracy_matrix = _build_accuracy_matrix(nme_matrix, nme_matrix_labels)
         if nme_accuracy_matrix is not None:
             experiment_logger.log_accuracy_matrix("nme", nme_accuracy_matrix, nme_matrix_labels)
+        for variant_name, metric_store in eval_variant_store.items():
+            variant_accuracy_matrix = _build_accuracy_matrix(metric_store["matrix"], metric_store["labels"])
+            if variant_accuracy_matrix is not None:
+                experiment_logger.log_accuracy_matrix(variant_name, variant_accuracy_matrix, metric_store["labels"])
 
         if 'print_forget' in args.keys() and args['print_forget'] is True:
             cnn_forgetting_info = _compute_forgetting(cnn_matrix, task)
@@ -261,6 +305,13 @@ def _train(args):
                 print(nme_acctable)
                 logging.info('Forgetting (NME): {}'.format(forgetting))
                 summary_metrics["summary/nme/forgetting"] = forgetting
+            for variant_name, metric_store in eval_variant_store.items():
+                variant_forgetting_info = _compute_forgetting(metric_store["matrix"], task)
+                if variant_forgetting_info is None:
+                    continue
+                _, forgetting = variant_forgetting_info
+                logging.info('Forgetting (%s): %s', variant_name, forgetting)
+                summary_metrics[f"summary/{variant_name}/forgetting"] = forgetting
 
         experiment_logger.log_summary(summary_metrics)
     finally:

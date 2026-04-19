@@ -150,6 +150,23 @@ class ExperimentLogger:
 
         self._swanlab.log(_to_builtin(payload), step=step)
 
+    def log_eval_variants(
+        self,
+        eval_variants: Optional[Dict[str, Dict[str, Any]]],
+        step: int,
+        avg_variants: Optional[Dict[str, float]] = None,
+    ) -> None:
+        if not self.enabled or not eval_variants:
+            return
+
+        payload = {}
+        for name, accy in eval_variants.items():
+            payload.update(self._flatten_eval_metrics(name, accy))
+            if avg_variants and name in avg_variants:
+                payload[f"eval/{name}/avg_top1"] = avg_variants[name]
+
+        self._swanlab.log(_to_builtin(payload), step=step)
+
     def _flatten_eval_metrics(self, prefix: str, accy: Dict[str, Any]) -> Dict[str, Any]:
         payload = {
             f"eval/{prefix}/top1": accy["top1"],
