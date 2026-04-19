@@ -3,6 +3,9 @@ import numpy as np
 from torchvision import datasets, transforms
 from utils.toolkit import split_images_labels
 
+IMAGENET_MEAN = [0.485, 0.456, 0.406]
+IMAGENET_STD = [0.229, 0.224, 0.225]
+
 
 class iData(object):
     train_trsf = []
@@ -118,6 +121,12 @@ def build_transform(is_train, args):
     
     # return transforms.Compose(t)
     return t
+
+
+def build_imagenet_normalize():
+    return transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
+
+
 class iCIFAR224(iData):
     def __init__(self, args):
         super().__init__()
@@ -217,6 +226,10 @@ class iImageNetR(iData):
             self.common_trsf = [
                 # transforms.ToTensor(),
             ]
+        elif args["model_name"] == "arcl":
+            self.train_trsf = build_transform(True, args)
+            self.test_trsf = build_transform(False, args)
+            self.common_trsf = [build_imagenet_normalize()]
         else:
             self.train_trsf = build_transform(True, args)
             self.test_trsf = build_transform(False, args)
@@ -247,10 +260,15 @@ class iDomainNet(iData):
         if args["model_name"] == "coda_prompt":
             self.train_trsf = build_transform_coda_prompt(True, args)
             self.test_trsf = build_transform_coda_prompt(False, args)
+            self.common_trsf = []
+        elif args["model_name"] == "arcl":
+            self.train_trsf = build_transform(True, args)
+            self.test_trsf = build_transform(False, args)
+            self.common_trsf = [build_imagenet_normalize()]
         else:
             self.train_trsf = build_transform(True, args)
             self.test_trsf = build_transform(False, args)
-        self.common_trsf = []
+            self.common_trsf = []
 
         self.class_order = np.arange(200).tolist()
 

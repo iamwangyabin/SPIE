@@ -139,6 +139,70 @@ class Learner(BaseLearner):
         self.avg_attn_map = None
         self.temp_count = 0
 
+    @staticmethod
+    def _tensor_stats(name, tensor):
+        tensor = tensor.detach()
+        finite_mask = torch.isfinite(tensor)
+        finite_count = int(finite_mask.sum().item())
+        total_count = tensor.numel()
+        if finite_count == 0:
+            return f"{name}: finite=0/{total_count}, dtype={tensor.dtype}, shape={tuple(tensor.shape)}"
+
+        finite_values = tensor[finite_mask]
+        return (
+            f"{name}: finite={finite_count}/{total_count}, dtype={tensor.dtype}, shape={tuple(tensor.shape)}, "
+            f"min={float(finite_values.amin().item()):.4f}, max={float(finite_values.amax().item()):.4f}"
+        )
+
+    def _assert_finite_parameters(self):
+        bad_params = []
+        for name, param in self._network.named_parameters():
+            if not torch.isfinite(param).all():
+                bad_params.append(self._tensor_stats(name, param))
+                if len(bad_params) >= 8:
+                    break
+        if bad_params:
+            raise FloatingPointError("Non-finite ARCL parameters before forward: " + " | ".join(bad_params))
+
+    def _diagnose_nonfinite_forward(self, inputs):
+        diagnostics = [self._tensor_stats("inputs", inputs)]
+        network = self._network
+        network.eval()
+
+        with torch.no_grad():
+            x = inputs.float()
+            x = network.backbone.patch_embed(x)
+            diagnostics.append(self._tensor_stats("patch_embed", x))
+            if not torch.isfinite(x).all():
+                return " | ".join(diagnostics)
+
+            cls_tokens = network.backbone.cls_token.expand(x.shape[0], -1, -1).float()
+            x = torch.cat((cls_tokens, x), dim=1)
+            x = x + network.backbone.pos_embed.float()
+            x = network.backbone.pos_drop(x)
+            diagnostics.append(self._tensor_stats("pos_drop", x))
+            if not torch.isfinite(x).all():
+                return " | ".join(diagnostics)
+
+            for block_idx, block in enumerate(network.backbone.blocks):
+                x = block(x)
+                diagnostics.append(self._tensor_stats(f"block_{block_idx}", x))
+                if not torch.isfinite(x).all():
+                    diagnostics.append(self._tensor_stats(f"block_{block_idx}_q_proj_weight", block.attn.q_proj.weight))
+                    diagnostics.append(self._tensor_stats(f"block_{block_idx}_k_proj_weight", block.attn.k_proj.weight))
+                    diagnostics.append(self._tensor_stats(f"block_{block_idx}_v_proj_weight", block.attn.v_proj.weight))
+                    return " | ".join(diagnostics)
+
+            x = network.backbone.norm(x)
+            diagnostics.append(self._tensor_stats("backbone_norm", x))
+            feats = x[:, 0]
+            diagnostics.append(self._tensor_stats("features_fp32", feats))
+            current_head = network.fc.heads[self._cur_task]
+            current_logits = current_head(feats)
+            diagnostics.append(self._tensor_stats("current_head_logits_fp32", current_logits))
+
+        return " | ".join(diagnostics)
+
     def after_task(self):
         self._known_classes = self._total_classes
 
@@ -174,6 +238,7 @@ class Learner(BaseLearner):
     def _train_task(self, train_loader):
         self._network.to(self._device)
         self._set_trainable_state()
+        self._assert_finite_parameters()
 
         qkv_params = []
         for name, param in self._network.backbone.named_parameters():
@@ -209,21 +274,28 @@ class Learner(BaseLearner):
             correct, total = 0, 0
             rollout_batch_maps = []
 
-            for _, inputs, targets in train_loader:
+            for batch_indices, inputs, targets in train_loader:
                 inputs = inputs.to(self._device)
                 targets = targets.to(self._device)
+                if not torch.isfinite(inputs).all():
+                    raise FloatingPointError(
+                        "Non-finite ARCL inputs detected: "
+                        + self._tensor_stats("inputs", inputs)
+                        + f" | batch_indices={tensor2numpy(batch_indices).tolist()} | targets={tensor2numpy(targets).tolist()}"
+                    )
                 optimizer.zero_grad()
                 with _autocast_context(enabled=self.use_amp and torch.cuda.is_available()):
                     logits = self._network(inputs)["logits"]
                     task_logits = logits[:, self._known_classes : self._total_classes]
                 loss = criterion(task_logits.float() / self.temperature, targets - self._known_classes)
                 if not torch.isfinite(loss):
-                    logits_min = float(task_logits.detach().amin().item())
-                    logits_max = float(task_logits.detach().amax().item())
                     raise FloatingPointError(
                         "Non-finite loss detected in ARCL "
-                        f"(task={self._cur_task}, epoch={epoch + 1}, "
-                        f"logit_range=[{logits_min:.4f}, {logits_max:.4f}])"
+                        f"(task={self._cur_task}, epoch={epoch + 1}) | "
+                        + self._tensor_stats("task_logits_amp", task_logits)
+                        + " | "
+                        + self._diagnose_nonfinite_forward(inputs)
+                        + f" | batch_indices={tensor2numpy(batch_indices).tolist()} | targets={tensor2numpy(targets).tolist()}"
                     )
 
                 scaler.scale(loss).backward()
