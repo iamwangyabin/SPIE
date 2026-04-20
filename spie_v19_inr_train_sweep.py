@@ -373,10 +373,8 @@ def prepare_base_config(raw_config: Dict[str, Any], args: argparse.Namespace) ->
     target_dataset = str(args.target_dataset).strip() if args.target_dataset else str(cfg.get("dataset", "")).strip()
     if target_dataset:
         cfg["dataset"] = target_dataset
+    cfg["swanlab"] = True
     cfg["prefix"] = args.force_prefix
-    if not args.enable_swanlab:
-        cfg["swanlab"] = False
-        cfg["swanlab_mode"] = "disabled"
     return cfg
 
 
