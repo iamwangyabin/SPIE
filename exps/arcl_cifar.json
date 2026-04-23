@@ -11,7 +11,7 @@
     "backbone_type": "pretrained_vit_b16_224_in21k_arcl",
     "device": ["0"],
     "seed": [2026],
-    "swanlab": false,
+    "swanlab": true,
     "pretrained": true,
     "epochs": 5,
     "batch_size": 100,
