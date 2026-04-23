@@ -12,8 +12,15 @@
     "increment": 20,
     "model_name": "mos",
     "backbone_type": "vit_base_patch16_224_mos",
-    "device": ["0"],
-    "seed": [1993],
+    "device": [
+        "0"
+    ],
+    "seed": [
+        1993
+    ],
+    "swanlab": true,
+    "swanlab_project": "SPIE",
+    "swanlab_mode": "online",
     "tuned_epoch": 10,
     "init_lr": 0.05,
     "batch_size": 16,
@@ -22,7 +29,9 @@
     "optimizer": "sgd",
     "scheduler": "cosine",
     "reinit_optimizer": true,
-    "init_milestones": [10],
+    "init_milestones": [
+        10
+    ],
     "init_lr_decay": 0.1,
     "reg": 0.1,
     "adapter_momentum": 0.1,
@@ -31,7 +40,11 @@
     "crct_epochs": 30,
     "ca_lr": 0.005,
     "ca_storage_efficient_method": "covariance",
-    "ca_storage_efficient_method_choices": ["covariance", "multi-centroid", "variance"],
+    "ca_storage_efficient_method_choices": [
+        "covariance",
+        "multi-centroid",
+        "variance"
+    ],
     "n_centroids": 10,
     "pretrained": true,
     "drop": 0.0,

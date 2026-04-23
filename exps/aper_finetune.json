@@ -9,17 +9,22 @@
     "increment": 10,
     "model_name": "aper_finetune",
     "backbone_type": "pretrained_vit_b16_224",
-    "device": ["0"],
-    "seed": [1993],
-    
-    "tuned_epoch":6,
-    "init_lr":0.01,
-    "batch_size":128,
-    "weight_decay":0.05,
-    "min_lr":0,
-    "ffn_num":64,
-    "optimizer":"sgd",
-    "vpt_type":"deep",
-    "prompt_token_num":5
+    "device": [
+        "0"
+    ],
+    "seed": [
+        1993
+    ],
+    "swanlab": true,
+    "swanlab_project": "SPIE",
+    "swanlab_mode": "online",
+    "tuned_epoch": 6,
+    "init_lr": 0.01,
+    "batch_size": 128,
+    "weight_decay": 0.05,
+    "min_lr": 0,
+    "ffn_num": 64,
+    "optimizer": "sgd",
+    "vpt_type": "deep",
+    "prompt_token_num": 5
 }
-

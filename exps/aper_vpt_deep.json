@@ -9,16 +9,21 @@
     "increment": 10,
     "model_name": "aper_vpt",
     "backbone_type": "pretrained_vit_b16_224_vpt",
-    "device": ["0"],
-    "seed": [1993],
-    
-    "tuned_epoch":20,
-    "init_lr":0.01,
-    "batch_size":48,
-    "weight_decay":0.0005,
-    "min_lr":0,
-    "optimizer":"sgd",
-    "vpt_type":"deep",
-    "prompt_token_num":5
+    "device": [
+        "0"
+    ],
+    "seed": [
+        1993
+    ],
+    "swanlab": true,
+    "swanlab_project": "SPIE",
+    "swanlab_mode": "online",
+    "tuned_epoch": 20,
+    "init_lr": 0.01,
+    "batch_size": 48,
+    "weight_decay": 0.0005,
+    "min_lr": 0,
+    "optimizer": "sgd",
+    "vpt_type": "deep",
+    "prompt_token_num": 5
 }
-

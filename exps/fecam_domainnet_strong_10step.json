@@ -12,8 +12,15 @@
     "increment": 20,
     "model_name": "fecam",
     "backbone_type": "pretrained_vit_b16_224_adapter",
-    "device": ["0"],
-    "seed": [1993],
+    "device": [
+        "0"
+    ],
+    "seed": [
+        1993
+    ],
+    "swanlab": true,
+    "swanlab_project": "SPIE",
+    "swanlab_mode": "online",
     "tuned_epoch": 10,
     "init_lr": 0.05,
     "batch_size": 16,

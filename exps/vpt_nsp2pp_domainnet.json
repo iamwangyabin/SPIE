@@ -13,12 +13,15 @@
     "model_name": "vpt_nsp2pp",
     "backbone_type": "vit_base_patch16_224.augreg_in21k_vpt_nsp2pp",
     "augmentation_protocol": "benchmark",
-    "device": ["0"],
-    "seed": [2025],
+    "device": [
+        "0"
+    ],
+    "seed": [
+        2025
+    ],
     "swanlab": true,
-    "swanlab_project": "CIL",
+    "swanlab_project": "SPIE",
     "swanlab_mode": "online",
-
     "tuned_epoch": 10,
     "epochs": 10,
     "init_lr": 0.01,
@@ -28,31 +31,34 @@
     "eval_batch_size": 100,
     "eval_workers": 2,
     "expand_times": 10,
-    "weight_decay": 0.00005,
-    "min_lr": 0.00001,
+    "weight_decay": 5e-05,
+    "min_lr": 1e-05,
     "optimizer": "mod_adam",
     "scheduler": "multistep",
     "lr_sch": "multistep",
-    "init_milestones": [5, 8],
-    "decay_milestones": [5, 8],
+    "init_milestones": [
+        5,
+        8
+    ],
+    "decay_milestones": [
+        5,
+        8
+    ],
     "init_lr_decay": 0.1,
     "decay_rate": 0.1,
     "use_amp": true,
     "pretrained": true,
     "temperature": 30.0,
-
     "prompt_len": 4,
     "prompt_init": "uniform",
     "prompt_start_block": 0,
     "prompt_end_block": 11,
-
     "use_null_space": true,
     "null_thres_mode": "adaptive",
     "null_thres_value1": 0.0,
     "null_thres_value2": 0.0,
     "null_alpha1": 1.0,
     "null_alpha2": 1.0,
-
     "impt_enable": true,
     "impt_batch_size": 100,
     "impt_topk": 50,
@@ -61,7 +67,6 @@
     "impt_lr_decay": 1.0,
     "impt_momentum_old": 1.0,
     "impt_contrast_augment": "autoaug",
-
     "refine_head": true,
     "refine_epochs": 50,
     "refine_lr": 0.001,

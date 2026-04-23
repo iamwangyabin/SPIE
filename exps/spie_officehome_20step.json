@@ -12,8 +12,12 @@
     "increment": 3,
     "model_name": "spie",
     "backbone_type": "vit_base_patch16_224_in21k_spie",
-    "device": ["0"],
-    "seed": [1993],
+    "device": [
+        "0"
+    ],
+    "seed": [
+        1993
+    ],
     "swanlab": true,
     "swanlab_project": "SPIE",
     "swanlab_mode": "online",
@@ -50,7 +54,7 @@
     "shared_cls_ca_lr": 0.005,
     "freeze_shared_lora_after_task0": true,
     "spie_backbone_dataparallel": false,
-    "covariance_regularization": 1e-4,
+    "covariance_regularization": 0.0001,
     "max_covariance_retry_power": 6,
     "expert_shape_distill_lambda": 0.1,
     "expert_shape_distill_temperature": 2.0,

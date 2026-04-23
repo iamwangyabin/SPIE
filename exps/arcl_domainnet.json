@@ -12,26 +12,34 @@
     "increment": 20,
     "model_name": "arcl",
     "backbone_type": "pretrained_vit_b16_224_in21k_arcl",
-    "device": ["0"],
-    "seed": [2025],
+    "device": [
+        "0"
+    ],
+    "seed": [
+        2025
+    ],
     "swanlab": true,
+    "swanlab_project": "SPIE",
+    "swanlab_mode": "online",
     "pretrained": true,
-
     "epochs": 5,
     "batch_size": 64,
     "num_workers": 12,
     "use_amp": true,
     "temperature": 30.0,
-
     "lr": 0.01,
     "lr_scale": 0.01,
-    "lr_scale_patterns": ["qkv"],
+    "lr_scale_patterns": [
+        "qkv"
+    ],
     "optimizer": "mod_adam",
-    "weight_decay": 0.00005,
+    "weight_decay": 5e-05,
     "lr_sch": "multistep",
-    "min_lr": 0.00001,
-    "decay_milestones": [5, 8],
+    "min_lr": 1e-05,
+    "decay_milestones": [
+        5,
+        8
+    ],
     "decay_rate": 0.1,
-
     "use_update_scaling": true
 }

@@ -13,9 +13,15 @@
     "model_name": "mqmk",
     "backbone_type": "vit_base_patch16_224_in21k_mqmk",
     "mqmk_base_model": "vit_base_patch16_224_in21k",
-    "device": ["0"],
-    "seed": [1993],
-
+    "device": [
+        "0"
+    ],
+    "seed": [
+        1993
+    ],
+    "swanlab": true,
+    "swanlab_project": "SPIE",
+    "swanlab_mode": "online",
     "tuned_epoch": 430,
     "init_lr": 0.005,
     "batch_size": 64,
@@ -24,13 +30,14 @@
     "optimizer": "adam",
     "scheduler": "constant",
     "reinit_optimizer": true,
-    "init_milestones": [10],
+    "init_milestones": [
+        10
+    ],
     "init_lr_decay": 0.1,
     "pretrained": true,
     "drop": 0.0,
     "drop_path": 0.0,
     "clip_grad": 1.0,
-
     "multi_query": true,
     "multi_key": true,
     "mq_top_k": 1,
@@ -45,12 +52,24 @@
     "pull_constraint": true,
     "pull_constraint_coeff": 1.0,
     "perfect_match": false,
-
     "use_g_prompt": true,
     "g_prompt_length": 5,
-    "g_prompt_layer_idx": [0, 1],
+    "g_prompt_layer_idx": [
+        0,
+        1
+    ],
     "use_e_prompt": true,
-    "e_prompt_layer_idx": [2, 3, 4, 5, 6, 7, 8, 9, 10],
+    "e_prompt_layer_idx": [
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+    ],
     "same_key_value": false,
     "k_key": 1,
     "class_group": 1

@@ -9,8 +9,12 @@
     "increment": 20,
     "model_name": "min",
     "backbone_type": "pretrained_vit_b16_224_in21k_min",
-    "device": ["0"],
-    "seed": [1993],
+    "device": [
+        "0"
+    ],
+    "seed": [
+        1993
+    ],
     "swanlab": true,
     "swanlab_project": "SPIE",
     "swanlab_mode": "online",
