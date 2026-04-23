@@ -531,7 +531,10 @@ def _load_path_label_list(rootdir, txt_path):
     labels = []
     with open(txt_path, "r") as dict_file:
         for line in dict_file:
-            value, key = line.strip().split(" ")
+            line = line.strip()
+            if not line:
+                continue
+            value, key = line.rsplit(" ", 1)
             images.append(os.path.join(rootdir, value))
             labels.append(int(key))
 
