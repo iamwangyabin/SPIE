@@ -7,14 +7,14 @@ import torch
 from torch.nn import functional as F
 from tqdm import tqdm
 
-from models.spie_v16 import Learner as SPIEV16Learner
+from models.spie_base import Learner as SPIEBaseLearner
 from utils.toolkit import tensor2numpy
 
 
-class Learner(SPIEV16Learner):
-    """SPiE v19 keeps the v16 heads but aligns experts to shared-shape and uses posterior fusion."""
+class Learner(SPIEBaseLearner):
+    """SPiE keeps the shared/expert heads, then adds posterior fusion and shape alignment."""
 
-    _spie_version_name = "SPiE v19"
+    _spie_version_name = "SPiE"
 
     def __init__(self, args):
         super().__init__(args)
@@ -31,7 +31,7 @@ class Learner(SPIEV16Learner):
 
         logging.info(
             (
-                "SPiE v19 expert shape distill: lambda=%s temperature=%s cap_ratio=%s. "
+                "SPiE expert shape distill: lambda=%s temperature=%s cap_ratio=%s. "
                 "Posterior fusion: alpha=%s task_temperature=%s expert_temperature=%s shared_temperature=%s."
             ),
             self.expert_shape_distill_lambda,
@@ -300,7 +300,7 @@ class Learner(SPIEV16Learner):
 
         logging.info(
             (
-                "SPiE v19 eval variants: shared_fc uses shared logits top-k; "
+                "SPiE eval variants: shared_fc uses shared logits top-k; "
                 "p_moe uses p(task|x) * p(class|x,task); p_final mixes shared posterior and p_moe with alpha=%s."
             ),
             self.posterior_alpha,

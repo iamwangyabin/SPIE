@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from backbone.linears import TunaLinear
-from backbone.vit_spie import ExpertViT
+from backbone.vit_spie_onlymax import ExpertViT
 from models.base import BaseLearner
 from utils.toolkit import tensor2numpy
 

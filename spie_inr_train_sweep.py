@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Adaptive training sweep for SPiE v19 on ImageNet-R.
+Adaptive training sweep for SPiE on ImageNet-R.
 
 This script launches real training runs by calling:
     python -u main.py --config <generated_config.json> --note <run_note>
@@ -9,7 +9,7 @@ It is intentionally biased toward epoch-sensitive exploration:
 1. coarse global epoch scaling
 2. coordinate refinement for shared / expert / classifier-align epochs
 3. coordinate refinement for branch learning rates
-4. refinement for v19 shape-distillation knobs
+4. refinement for shape-distillation knobs
 5. optional margin sweep
 
 Artifacts are written under --output-dir:
@@ -181,10 +181,10 @@ def build_parser(
 
 def parse_args() -> argparse.Namespace:
     parser = build_parser(
-        description="Adaptive SPiE v19 ImageNet-R training sweep",
-        default_base_config="exps/spie_v19_inr.json",
-        default_output_dir="sweep_spie_v19_inr_train",
-        default_prefix="spie-v19-autosweep-inr",
+        description="Adaptive SPiE ImageNet-R training sweep",
+        default_base_config="exps/spie_inr.json",
+        default_output_dir="sweep_spie_inr_train",
+        default_prefix="spie-autosweep-inr",
         default_target_dataset="imagenetr",
     )
     return parser.parse_args()
@@ -369,7 +369,7 @@ def derive_objective(metrics: Dict[str, Any], objective_key: str) -> tuple[Optio
 
 def prepare_base_config(raw_config: Dict[str, Any], args: argparse.Namespace) -> Dict[str, Any]:
     cfg = copy.deepcopy(raw_config)
-    cfg["model_name"] = "spie_v19"
+    cfg["model_name"] = "spie"
     target_dataset = str(args.target_dataset).strip() if args.target_dataset else str(cfg.get("dataset", "")).strip()
     if target_dataset:
         cfg["dataset"] = target_dataset
@@ -846,7 +846,7 @@ class SweepRunner:
         return best
 
     def execute(self) -> Optional[Dict[str, Any]]:
-        print(f"[info] Adaptive SPiE v19 {self.base_config.get('dataset', 'dataset')} sweep")
+        print(f"[info] Adaptive SPiE {self.base_config.get('dataset', 'dataset')} sweep")
         print(f"[info] base_config: {self.base_config_path}")
         print(f"[info] output_dir: {self.paths['root']}")
         print(f"[info] preset: {self.args.preset}")
