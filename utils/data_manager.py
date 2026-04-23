@@ -12,6 +12,8 @@ from utils.data import (
     iImageNetR,
     iImageNetA,
     iDomainNet,
+    iOfficeHome,
+    iNICOPP,
     CUB,
     objectnet,
     omnibenchmark,
@@ -244,6 +246,10 @@ def _get_idata(dataset_name, args=None):
         return iImageNetA()
     elif name in {"domainnet", "sdomainet"}:
         return iDomainNet(args)
+    elif name == "officehome":
+        return iOfficeHome(args)
+    elif name == "nicopp":
+        return iNICOPP(args)
     elif name == "cub":
         return CUB()
     elif name == "objectnet":

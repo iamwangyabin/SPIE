@@ -325,6 +325,96 @@ class iDomainNet(iData):
         self.test_targets = test_labels
 
 
+class iOfficeHome(iData):
+    def __init__(self, args):
+        super().__init__()
+        self.args = args
+        self.use_path = True
+
+        if use_vpt_nsp2pp_official_aug(args):
+            self.train_trsf = build_vpt_nsp2pp_transform(True)
+            self.test_trsf = build_vpt_nsp2pp_transform(False)
+            self.common_trsf = []
+        elif args["model_name"] == "coda_prompt":
+            self.train_trsf = build_transform_coda_prompt(True, args)
+            self.test_trsf = build_transform_coda_prompt(False, args)
+            self.common_trsf = []
+        elif args["model_name"] == "arcl":
+            self.train_trsf = build_transform(True, args)
+            self.test_trsf = build_transform(False, args)
+            self.common_trsf = [build_imagenet_normalize()]
+        else:
+            self.train_trsf = build_transform(True, args)
+            self.test_trsf = build_transform(False, args)
+            self.common_trsf = []
+
+        self.class_order = np.arange(65).tolist()
+
+    def download_data(self):
+        rootdir = self.args.get("officehome_root", "./data/office-home")
+        train_txt = self.args.get(
+            "officehome_train_txt", "./utils/datautils/officehome/train.txt"
+        )
+        test_txt = self.args.get(
+            "officehome_test_txt", "./utils/datautils/officehome/test.txt"
+        )
+
+        self.train_data, self.train_targets, self.test_data, self.test_targets = (
+            _load_path_list_or_imagefolder_split(
+                rootdir=rootdir,
+                train_txt=train_txt,
+                test_txt=test_txt,
+                default_train_dir=os.path.join(rootdir, "train"),
+                default_test_dir=os.path.join(rootdir, "test"),
+            )
+        )
+
+
+class iNICOPP(iData):
+    def __init__(self, args):
+        super().__init__()
+        self.args = args
+        self.use_path = True
+
+        if use_vpt_nsp2pp_official_aug(args):
+            self.train_trsf = build_vpt_nsp2pp_transform(True)
+            self.test_trsf = build_vpt_nsp2pp_transform(False)
+            self.common_trsf = []
+        elif args["model_name"] == "coda_prompt":
+            self.train_trsf = build_transform_coda_prompt(True, args)
+            self.test_trsf = build_transform_coda_prompt(False, args)
+            self.common_trsf = []
+        elif args["model_name"] == "arcl":
+            self.train_trsf = build_transform(True, args)
+            self.test_trsf = build_transform(False, args)
+            self.common_trsf = [build_imagenet_normalize()]
+        else:
+            self.train_trsf = build_transform(True, args)
+            self.test_trsf = build_transform(False, args)
+            self.common_trsf = []
+
+        self.class_order = np.arange(80).tolist()
+
+    def download_data(self):
+        rootdir = self.args.get("nicopp_root", "./data/nicopp")
+        train_txt = self.args.get(
+            "nicopp_train_txt", "./utils/datautils/nicopp/train.txt"
+        )
+        test_txt = self.args.get(
+            "nicopp_test_txt", "./utils/datautils/nicopp/test.txt"
+        )
+
+        self.train_data, self.train_targets, self.test_data, self.test_targets = (
+            _load_path_list_or_imagefolder_split(
+                rootdir=rootdir,
+                train_txt=train_txt,
+                test_txt=test_txt,
+                default_train_dir=os.path.join(rootdir, "train"),
+                default_test_dir=os.path.join(rootdir, "test"),
+            )
+        )
+
+
 class iImageNetA(iData):
     use_path = True
     
@@ -445,3 +535,22 @@ def _load_path_label_list(rootdir, txt_path):
             labels.append(int(key))
 
     return np.array(images), np.array(labels)
+
+
+def _load_path_list_or_imagefolder_split(
+    rootdir,
+    train_txt,
+    test_txt,
+    default_train_dir,
+    default_test_dir,
+):
+    if os.path.isfile(train_txt) and os.path.isfile(test_txt):
+        train_images, train_labels = _load_path_label_list(rootdir, train_txt)
+        test_images, test_labels = _load_path_label_list(rootdir, test_txt)
+        return train_images, train_labels, test_images, test_labels
+
+    train_dset = datasets.ImageFolder(default_train_dir)
+    test_dset = datasets.ImageFolder(default_test_dir)
+    train_images, train_labels = split_images_labels(train_dset.imgs)
+    test_images, test_labels = split_images_labels(test_dset.imgs)
+    return train_images, train_labels, test_images, test_labels
