@@ -79,8 +79,20 @@ def build_transform_coda_prompt(is_train, args):
         ]
         return transform
 
+    dataset_name = str(args.get("dataset", "")).lower()
+    imagenet_style_eval_datasets = {
+        "domainnet",
+        "sdomainet",
+        "officehome",
+        "nicopp",
+        "cub",
+        "objectnet",
+        "omnibenchmark",
+        "vtab",
+    }
+
     t = []
-    if args["dataset"].startswith("imagenet"):
+    if dataset_name.startswith("imagenet") or dataset_name in imagenet_style_eval_datasets:
         t = [
             transforms.Resize(256),
             transforms.CenterCrop(224),
@@ -89,7 +101,7 @@ def build_transform_coda_prompt(is_train, args):
         ]
     else:
         t = [
-            transforms.Resize(224),
+            transforms.Resize((224, 224)),
             transforms.ToTensor(),
             transforms.Normalize((0.0,0.0,0.0), (1.0,1.0,1.0)),
         ]
