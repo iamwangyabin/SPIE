@@ -1,0 +1,69 @@
+{
+  "config_count": 3,
+  "configs": [
+    "/Users/wangyabin/Documents/GitHub/SPIE/exps/tuna_domainnet.json",
+    "/Users/wangyabin/Documents/GitHub/SPIE/exps/tuna_domainnet_strong_10step.json",
+    "/Users/wangyabin/Documents/GitHub/SPIE/exps/tuna_domainnet_strong_20step.json"
+  ],
+  "resolved_txt_count": 4,
+  "missing_txt_count": 2,
+  "missing_txts": [
+    {
+      "config": "/Users/wangyabin/Documents/GitHub/SPIE/exps/tuna_domainnet.json",
+      "key": "domainnet_train_txt",
+      "missing_txt": "/Users/wangyabin/Documents/GitHub/SPIE/utils/datautils/domainnet/train.txt"
+    },
+    {
+      "config": "/Users/wangyabin/Documents/GitHub/SPIE/exps/tuna_domainnet.json",
+      "key": "domainnet_test_txt",
+      "missing_txt": "/Users/wangyabin/Documents/GitHub/SPIE/utils/datautils/domainnet/test.txt"
+    }
+  ],
+  "referenced_file_count": 193848,
+  "existing_referenced_file_count": 193848,
+  "missing_referenced_file_count": 0,
+  "existing_dataset_file_count": 596006,
+  "unused_existing_file_count": 402158,
+  "calibrated_txts": [
+    {
+      "config": "/Users/wangyabin/Documents/GitHub/SPIE/exps/tuna_domainnet_strong_10step.json",
+      "key": "domainnet_train_txt",
+      "source_txt": "/Users/wangyabin/Documents/GitHub/SPIE/utils/datautils/domainnet/strong_top200_seed1993_init20_inc20/train.txt",
+      "output_txt": "/Users/wangyabin/Documents/GitHub/SPIE/utils/datautils/domainnet/cleaned_tuna_lists/strong_top200_seed1993_init20_inc20/train.txt",
+      "original_lines": 45628,
+      "kept_lines": 45628,
+      "dropped_missing_lines": 0
+    },
+    {
+      "config": "/Users/wangyabin/Documents/GitHub/SPIE/exps/tuna_domainnet_strong_10step.json",
+      "key": "domainnet_test_txt",
+      "source_txt": "/Users/wangyabin/Documents/GitHub/SPIE/utils/datautils/domainnet/strong_top200_seed1993_init20_inc20/test.txt",
+      "output_txt": "/Users/wangyabin/Documents/GitHub/SPIE/utils/datautils/domainnet/cleaned_tuna_lists/strong_top200_seed1993_init20_inc20/test.txt",
+      "original_lines": 116280,
+      "kept_lines": 116280,
+      "dropped_missing_lines": 0
+    },
+    {
+      "config": "/Users/wangyabin/Documents/GitHub/SPIE/exps/tuna_domainnet_strong_20step.json",
+      "key": "domainnet_train_txt",
+      "source_txt": "/Users/wangyabin/Documents/GitHub/SPIE/utils/datautils/domainnet/strong_top200_seed1993_init10_inc10/train.txt",
+      "output_txt": "/Users/wangyabin/Documents/GitHub/SPIE/utils/datautils/domainnet/cleaned_tuna_lists/strong_top200_seed1993_init10_inc10/train.txt",
+      "original_lines": 43649,
+      "kept_lines": 43649,
+      "dropped_missing_lines": 0
+    },
+    {
+      "config": "/Users/wangyabin/Documents/GitHub/SPIE/exps/tuna_domainnet_strong_20step.json",
+      "key": "domainnet_test_txt",
+      "source_txt": "/Users/wangyabin/Documents/GitHub/SPIE/utils/datautils/domainnet/strong_top200_seed1993_init10_inc10/test.txt",
+      "output_txt": "/Users/wangyabin/Documents/GitHub/SPIE/utils/datautils/domainnet/cleaned_tuna_lists/strong_top200_seed1993_init10_inc10/test.txt",
+      "original_lines": 116280,
+      "kept_lines": 116280,
+      "dropped_missing_lines": 0
+    }
+  ],
+  "delete_stats": {
+    "deleted_files": 402158,
+    "deleted_dirs": 870
+  }
+}
