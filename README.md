@@ -8,7 +8,7 @@
 
 - 统一入口：`main.py` 读取 JSON 配置并启动训练
 - 统一训练流程：`trainer.py` 管理 task-by-task 增量训练、评测、日志和 checkpoint
-- 多方法支持：`tuna`、`tunamax`、`spie`、`ka_prompt`、`mqmk`、`onlymax`、`min`、`min_ablation`、`moal`、`mos`、`consistent_moe_prompt`、`arcl`、`vpt_nsp2pp`
+- 多方法支持：`aper`、`aper_finetune`、`aper_ssf`、`aper_vpt`、`aper_adapter`、`l2p`、`dualprompt`、`coda_prompt`、`ease`、`slca`、`ranpac`、`fecam`、`cofima`、`tuna`、`tunamax`、`spie`、`ka_prompt`、`mqmk`、`onlymax`、`min`、`min_ablation`、`moal`、`mos`、`consistent_moe_prompt`、`arcl`、`vpt_nsp2pp`
 - 多数据集支持：`cifar224`、`imagenetr`、`imageneta`、`domainnet`、`officehome`、`nicopp`、`cub`、`objectnet`、`omnibenchmark`、`vtab`，以及基础的 `cifar10`、`cifar100`、`imagenet100`、`imagenet1000`
 - 自动输出实验目录：日志、checkpoint、评测曲线和汇总指标都会落到 `logs/`
 - 可选 SwanLab 记录：大多数配置默认开启 `swanlab`
@@ -80,6 +80,8 @@ python main.py --config ./exps/spie_cifar_10step.json --note debug
 bash scripts/train_spie_cifar.sh
 bash scripts/train_spie_inr.sh
 bash scripts/train_tuna_cifar.sh
+bash scripts/train_domainnet.sh all
+bash scripts/train_domainnet_added.sh all
 ```
 
 ## 运行前先检查的两件事
@@ -93,6 +95,19 @@ bash scripts/train_tuna_cifar.sh
 
 - `tuna`
 - `tunamax`
+- `aper`
+- `aper_finetune`
+- `aper_ssf`
+- `aper_vpt`
+- `aper_adapter`
+- `l2p`
+- `dualprompt`
+- `coda_prompt`
+- `ease`
+- `slca`
+- `ranpac`
+- `fecam`
+- `cofima`
 - `spie`
 - `ka_prompt`
 - `mqmk`
