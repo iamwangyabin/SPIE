@@ -255,7 +255,7 @@ def _get_idata(dataset_name, args=None):
     elif name == "objectnet":
         return objectnet()
     elif name == "omnibenchmark":
-        return omnibenchmark()
+        return omnibenchmark(args)
     elif name == "vtab":
         return vtab()
 

@@ -480,18 +480,19 @@ class objectnet(iData):
 
 
 class omnibenchmark(iData):
-    use_path = True
-    
-    train_trsf = build_transform(True, None)
-    test_trsf = build_transform(False, None)
-    common_trsf = [    ]
-
-    class_order = np.arange(300).tolist()
+    def __init__(self, args=None):
+        super().__init__()
+        self.args = args or {}
+        self.use_path = True
+        self.train_trsf = build_transform(True, args)
+        self.test_trsf = build_transform(False, args)
+        self.common_trsf = []
+        self.class_order = np.arange(300).tolist()
 
     def download_data(self):
-        # assert 0, "You should specify the folder of your dataset"
-        train_dir = "./data/omnibenchmark/train/"
-        test_dir = "./data/omnibenchmark/test/"
+        rootdir = self.args.get("omnibenchmark_root", "./data/omnibenchmark")
+        train_dir = os.path.join(rootdir, "train")
+        test_dir = os.path.join(rootdir, "test")
 
         train_dset = datasets.ImageFolder(train_dir)
         test_dset = datasets.ImageFolder(test_dir)

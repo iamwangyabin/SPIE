@@ -1,6 +1,7 @@
 {
     "prefix": "spie-omnibenchmark-50step",
     "dataset": "omnibenchmark",
+    "omnibenchmark_root": "./data/omnibenchmark",
     "memory_size": 0,
     "memory_per_class": 0,
     "fixed_memory": false,
