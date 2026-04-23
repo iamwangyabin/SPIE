@@ -20,7 +20,6 @@ run_config() {
 }
 
 run_tuna() {
-    run_config "exps/tuna_domainnet.json" "bash-domainnet-tuna"
     run_config "exps/tuna_domainnet_strong_10step.json" "bash-domainnet-tuna-strong-10step"
     run_config "exps/tuna_domainnet_strong_20step.json" "bash-domainnet-tuna-strong-20step"
 }
