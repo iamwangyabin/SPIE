@@ -46,9 +46,190 @@ patch_timm_dataclass_defaults()
 
 from timm.data import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD, IMAGENET_INCEPTION_MEAN, IMAGENET_INCEPTION_STD, \
     OPENAI_CLIP_MEAN, OPENAI_CLIP_STD
-from timm.layers import PatchEmbed, Mlp, DropPath, AttentionPoolLatent, RmsNorm, PatchDropout, SwiGLUPacked, \
-    trunc_normal_, lecun_normal_, resample_patch_embed, resample_abs_pos_embed, use_fused_attn, \
-    get_act_layer, get_norm_layer, LayerType
+try:
+    from timm.layers import PatchEmbed, Mlp, DropPath, AttentionPoolLatent, RmsNorm, PatchDropout, SwiGLUPacked, \
+        trunc_normal_, lecun_normal_, resample_patch_embed, resample_abs_pos_embed, use_fused_attn, \
+        get_act_layer, get_norm_layer, LayerType
+except ImportError:
+    from timm.models.layers import DropPath, Mlp, lecun_normal_, to_2tuple, trunc_normal_
+    from timm.models.vision_transformer import PatchEmbed as TimmPatchEmbed
+
+    LayerType = Union[str, Callable, Type[nn.Module]]
+
+    class PatchEmbed(TimmPatchEmbed):
+        def __init__(
+                self,
+                img_size: Union[int, Tuple[int, int]] = 224,
+                patch_size: Union[int, Tuple[int, int]] = 16,
+                in_chans: int = 3,
+                embed_dim: int = 768,
+                bias: bool = True,
+                dynamic_img_pad: bool = False,
+                strict_img_size: bool = True,
+                output_fmt: Optional[str] = None,
+                **kwargs,
+        ) -> None:
+            try:
+                super().__init__(
+                    img_size=img_size,
+                    patch_size=patch_size,
+                    in_chans=in_chans,
+                    embed_dim=embed_dim,
+                    bias=bias,
+                    **kwargs,
+                )
+            except TypeError:
+                if not bias:
+                    raise NotImplementedError("bias=False PatchEmbed requires a newer timm.")
+                super().__init__(
+                    img_size=img_size,
+                    patch_size=patch_size,
+                    in_chans=in_chans,
+                    embed_dim=embed_dim,
+                    **kwargs,
+                )
+            if dynamic_img_pad or output_fmt not in (None, "NCHW"):
+                raise NotImplementedError("dynamic PatchEmbed options require a newer timm.")
+            self.strict_img_size = strict_img_size
+
+    def use_fused_attn() -> bool:
+        return hasattr(F, "scaled_dot_product_attention")
+
+    def get_act_layer(layer: Optional[LayerType]) -> Optional[Type[nn.Module]]:
+        if layer is None:
+            return None
+        if isinstance(layer, str):
+            layers = {
+                "gelu": nn.GELU,
+                "relu": nn.ReLU,
+                "silu": nn.SiLU,
+                "swish": nn.SiLU,
+                "tanh": nn.Tanh,
+            }
+            if layer not in layers:
+                raise ValueError(f"Unsupported activation layer for timm 0.6 compatibility: {layer}")
+            return layers[layer]
+        return layer
+
+    def get_norm_layer(layer: Optional[LayerType]) -> Optional[Type[nn.Module]]:
+        if layer is None:
+            return None
+        if isinstance(layer, str):
+            layers = {
+                "layernorm": nn.LayerNorm,
+                "layer_norm": nn.LayerNorm,
+                "batchnorm": nn.BatchNorm2d,
+                "batch_norm": nn.BatchNorm2d,
+            }
+            if layer not in layers:
+                raise ValueError(f"Unsupported norm layer for timm 0.6 compatibility: {layer}")
+            return layers[layer]
+        return layer
+
+    class PatchDropout(nn.Module):
+        def __init__(self, prob: float = 0., *args, **kwargs) -> None:
+            super().__init__()
+            if prob > 0:
+                raise NotImplementedError("patch_drop_rate > 0 requires a newer timm with PatchDropout.")
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            return x
+
+    class AttentionPoolLatent(nn.Module):
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__()
+            raise NotImplementedError("global_pool='map' requires a newer timm with AttentionPoolLatent.")
+
+    class RmsNorm(nn.Module):
+        def __init__(self, dim: int, eps: float = 1e-6) -> None:
+            super().__init__()
+            self.weight = nn.Parameter(torch.ones(dim))
+            self.eps = eps
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            x = x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
+            return x * self.weight
+
+    class SwiGLUPacked(nn.Module):
+        def __init__(
+                self,
+                in_features: int,
+                hidden_features: Optional[int] = None,
+                out_features: Optional[int] = None,
+                act_layer: Type[nn.Module] = nn.SiLU,
+                drop: float = 0.,
+        ) -> None:
+            super().__init__()
+            out_features = out_features or in_features
+            hidden_features = hidden_features or in_features
+            self.fc1 = nn.Linear(in_features, hidden_features * 2)
+            self.act = act_layer()
+            self.drop = nn.Dropout(drop)
+            self.fc2 = nn.Linear(hidden_features, out_features)
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            x, gate = self.fc1(x).chunk(2, dim=-1)
+            x = x * self.act(gate)
+            x = self.drop(x)
+            x = self.fc2(x)
+            return self.drop(x)
+
+    def resample_abs_pos_embed(
+            posemb: torch.Tensor,
+            new_size: Tuple[int, int],
+            old_size: Optional[Tuple[int, int]] = None,
+            num_prefix_tokens: int = 1,
+            interpolation: str = "bicubic",
+            antialias: bool = False,
+            verbose: bool = False,
+    ) -> torch.Tensor:
+        if old_size is None:
+            ntok = posemb.shape[1] - num_prefix_tokens
+            old_size = to_2tuple(int(math.sqrt(ntok)))
+        posemb_prefix = posemb[:, :num_prefix_tokens]
+        posemb_grid = posemb[:, num_prefix_tokens:]
+        posemb_grid = posemb_grid.reshape(1, old_size[0], old_size[1], -1).permute(0, 3, 1, 2)
+        posemb_grid = F.interpolate(
+            posemb_grid,
+            size=new_size,
+            mode=interpolation,
+            antialias=antialias,
+            align_corners=False,
+        )
+        posemb_grid = posemb_grid.permute(0, 2, 3, 1).reshape(1, new_size[0] * new_size[1], -1)
+        return torch.cat([posemb_prefix, posemb_grid], dim=1)
+
+    def resample_patch_embed(
+            patch_embed: torch.Tensor,
+            new_size: Tuple[int, int],
+            interpolation: str = "bicubic",
+            antialias: bool = False,
+            verbose: bool = False,
+    ) -> torch.Tensor:
+        out_channels, in_channels, old_h, old_w = patch_embed.shape
+        patch_embed = F.interpolate(
+            patch_embed.reshape(out_channels * in_channels, 1, old_h, old_w),
+            size=new_size,
+            mode=interpolation,
+            antialias=antialias,
+            align_corners=False,
+        )
+        return patch_embed.reshape(out_channels, in_channels, new_size[0], new_size[1])
+
+try:
+    from timm.models import adapt_input_conv, build_model_with_cfg, named_apply
+except ImportError:
+    try:
+        from timm.models.helpers import adapt_input_conv, build_model_with_cfg, named_apply
+    except ImportError:
+        adapt_input_conv = None
+        build_model_with_cfg = None
+
+        def named_apply(fn: Callable, module: nn.Module, name: str = "") -> nn.Module:
+            for child_name, child_module in module.named_children():
+                named_apply(fn, child_module, f"{name}.{child_name}" if name else child_name)
+            fn(module, name)
+            return module
 
 __all__ = ['VisionTransformer']  # model_registry will add each entrypoint fn to this
 
