@@ -120,9 +120,11 @@ class Learner(SPIEBaseLearner):
         prog_bar = tqdm(range(epochs))
         expert_head = self._network.get_expert_head(self._cur_task)
         loss_cos = self._shape_aware_cosface()
+        use_shape_distill = self.expert_shape_distill_lambda > 0
 
         for _, epoch in enumerate(prog_bar):
             self._network.backbone.train()
+            self._network.fc_shared_cls.eval()
             expert_head.train()
             losses = 0.0
             ce_losses = 0.0
@@ -134,19 +136,18 @@ class Learner(SPIEBaseLearner):
                 inputs, targets = inputs.to(self._device), targets.to(self._device)
                 local_targets = targets - self._known_classes
 
-                with torch.no_grad():
-                    self._network.backbone.eval()
-                    self._network.fc_shared_cls.eval()
-                    shared_local_logits = self._shared_cls_logits(inputs)[:, self._known_classes : self._total_classes]
-                self._network.backbone.train()
-                expert_head.train()
-
-                expert_features = self._network.backbone(inputs, adapter_id=self._cur_task, train=True)["expert_features"]
-                expert_out = expert_head(expert_features)
+                backbone_out = self._network.backbone(inputs, adapter_id=self._cur_task, train=True)
+                expert_out = expert_head(backbone_out["expert_features"])
                 logits = expert_out["logits"]
 
                 ce_loss = loss_cos(logits, local_targets)
-                shape_loss = self._shape_distillation_loss(logits, shared_local_logits)
+                if use_shape_distill:
+                    with torch.no_grad():
+                        shared_logits = self._network.fc_shared_cls(backbone_out["cls_features"].detach())["logits"]
+                        shared_local_logits = shared_logits[:, self._known_classes : self._total_classes]
+                    shape_loss = self._shape_distillation_loss(logits, shared_local_logits)
+                else:
+                    shape_loss = logits.new_zeros(())
                 shape_penalty = self.expert_shape_distill_lambda * shape_loss
                 if self.expert_shape_reg_cap_ratio > 0:
                     shape_penalty = torch.minimum(
