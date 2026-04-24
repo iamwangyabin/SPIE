@@ -29,6 +29,11 @@ run_tuna_shuffle() {
     run_config "exps/tuna_domainnet_normal_shuffle_20step.json" "bash-domainnet-tuna-normal-shuffle-20step"
 }
 
+run_tuna_easy() {
+    run_config "exps/tuna_domainnet_easy_10step.json" "bash-domainnet-tuna-easy-10step"
+    run_config "exps/tuna_domainnet_easy_20step.json" "bash-domainnet-tuna-easy-20step"
+}
+
 run_spie() {
     run_config "exps/spie_domainnet_strong_10step.json" "bash-domainnet-spie-strong-10step"
     run_config "exps/spie_domainnet_strong_20step.json" "bash-domainnet-spie-strong-20step"
@@ -37,6 +42,11 @@ run_spie() {
 run_spie_shuffle() {
     run_config "exps/spie_domainnet_normal_shuffle_10step.json" "bash-domainnet-spie-normal-shuffle-10step"
     run_config "exps/spie_domainnet_normal_shuffle_20step.json" "bash-domainnet-spie-normal-shuffle-20step"
+}
+
+run_spie_easy() {
+    run_config "exps/spie_domainnet_easy_10step.json" "bash-domainnet-spie-easy-10step"
+    run_config "exps/spie_domainnet_easy_20step.json" "bash-domainnet-spie-easy-20step"
 }
 
 run_spie_moretrain() {
@@ -51,11 +61,17 @@ case "${TARGET}" in
     tuna_shuffle)
         run_tuna_shuffle
         ;;
+    tuna_easy)
+        run_tuna_easy
+        ;;
     spie)
         run_spie
         ;;
     spie_shuffle)
         run_spie_shuffle
+        ;;
+    spie_easy)
+        run_spie_easy
         ;;
     spie_moretrain)
         run_spie_moretrain
@@ -64,12 +80,16 @@ case "${TARGET}" in
         run_tuna_shuffle
         run_spie_shuffle
         ;;
+    easy)
+        run_tuna_easy
+        run_spie_easy
+        ;;
     all)
         run_tuna
         run_spie
         ;;
     *)
-        echo "Usage: $0 [tuna|tuna_shuffle|spie|spie_shuffle|spie_moretrain|shuffle|all]" >&2
+        echo "Usage: $0 [tuna|tuna_shuffle|tuna_easy|spie|spie_shuffle|spie_easy|spie_moretrain|shuffle|easy|all]" >&2
         exit 1
         ;;
 esac

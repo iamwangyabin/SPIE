@@ -1,0 +1,2670 @@
+{
+  "protocol": "easy",
+  "source_protocol_dir": "/Users/wangyabin/Documents/GitHub/SPIE/utils/datautils/domainnet/strong_top200_seed1993_init20_inc20",
+  "definition": "train.txt is copied from the source split; test.txt keeps only domains that appear for the same label in train.txt.",
+  "seed": 1993,
+  "top_k": 200,
+  "init_cls": 20,
+  "increment": 20,
+  "task_sizes": [
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20,
+    20
+  ],
+  "task_domains": [
+    "real",
+    "clipart",
+    "painting",
+    "sketch",
+    "infograph",
+    "quickdraw",
+    "real",
+    "clipart",
+    "painting",
+    "sketch"
+  ],
+  "tasks": [
+    [
+      "barn",
+      "rifle",
+      "dumbbell",
+      "rhinoceros",
+      "pond",
+      "moon",
+      "elephant",
+      "castle",
+      "eye",
+      "feather",
+      "circle",
+      "hedgehog",
+      "tree",
+      "monkey",
+      "telephone",
+      "necklace",
+      "map",
+      "bed",
+      "door",
+      "bread"
+    ],
+    [
+      "flower",
+      "goatee",
+      "penguin",
+      "finger",
+      "bee",
+      "sweater",
+      "octopus",
+      "pizza",
+      "yoga",
+      "broom",
+      "giraffe",
+      "flamingo",
+      "mug",
+      "tractor",
+      "onion",
+      "tent",
+      "pool",
+      "leaf",
+      "wine_bottle",
+      "ladder"
+    ],
+    [
+      "cruise_ship",
+      "hat",
+      "owl",
+      "mountain",
+      "sun",
+      "hot_air_balloon",
+      "submarine",
+      "parrot",
+      "donut",
+      "skyscraper",
+      "trombone",
+      "horse",
+      "waterslide",
+      "moustache",
+      "bowtie",
+      "skull",
+      "train",
+      "beach",
+      "truck",
+      "helicopter"
+    ],
+    [
+      "vase",
+      "watermelon",
+      "squiggle",
+      "pineapple",
+      "washing_machine",
+      "whale",
+      "saxophone",
+      "cat",
+      "toothpaste",
+      "asparagus",
+      "firetruck",
+      "bridge",
+      "teapot",
+      "house_plant",
+      "see_saw",
+      "tornado",
+      "snorkel",
+      "blueberry",
+      "candle",
+      "sword"
+    ],
+    [
+      "speedboat",
+      "stairs",
+      "crab",
+      "helmet",
+      "toothbrush",
+      "shorts",
+      "beard",
+      "envelope",
+      "raccoon",
+      "fish",
+      "rollerskates",
+      "car",
+      "table",
+      "crocodile",
+      "The_Eiffel_Tower",
+      "basket",
+      "bear",
+      "frog",
+      "sleeping_bag",
+      "stethoscope"
+    ],
+    [
+      "face",
+      "windmill",
+      "banana",
+      "steak",
+      "sock",
+      "bracelet",
+      "sandwich",
+      "backpack",
+      "flashlight",
+      "triangle",
+      "cup",
+      "wristwatch",
+      "eyeglasses",
+      "dolphin",
+      "leg",
+      "scorpion",
+      "school_bus",
+      "binoculars",
+      "ocean",
+      "harp"
+    ],
+    [
+      "animal_migration",
+      "lighthouse",
+      "book",
+      "popsicle",
+      "snowman",
+      "zebra",
+      "river",
+      "hamburger",
+      "coffee_cup",
+      "bottlecap",
+      "bicycle",
+      "pig",
+      "parachute",
+      "streetlight",
+      "lobster",
+      "carrot",
+      "dog",
+      "snail",
+      "duck",
+      "canoe"
+    ],
+    [
+      "squirrel",
+      "television",
+      "spider",
+      "cake",
+      "motorbike",
+      "syringe",
+      "headphones",
+      "grass",
+      "rabbit",
+      "zigzag",
+      "tiger",
+      "nose",
+      "ice_cream",
+      "hexagon",
+      "bus",
+      "nail",
+      "fence",
+      "drums",
+      "toilet",
+      "spreadsheet"
+    ],
+    [
+      "stove",
+      "violin",
+      "kangaroo",
+      "brain",
+      "shovel",
+      "strawberry",
+      "pillow",
+      "broccoli",
+      "wine_glass",
+      "pickup_truck",
+      "van",
+      "shark",
+      "shoe",
+      "mushroom",
+      "snake",
+      "sheep",
+      "hot_tub",
+      "teddy-bear",
+      "guitar",
+      "umbrella"
+    ],
+    [
+      "golf_club",
+      "scissors",
+      "bench",
+      "skateboard",
+      "garden",
+      "lion",
+      "sailboat",
+      "palm_tree",
+      "square",
+      "spoon",
+      "butterfly",
+      "toaster",
+      "swan",
+      "grapes",
+      "sea_turtle",
+      "bird",
+      "hand",
+      "suitcase",
+      "pear",
+      "light_bulb"
+    ]
+  ],
+  "class_order": [
+    "barn",
+    "rifle",
+    "dumbbell",
+    "rhinoceros",
+    "pond",
+    "moon",
+    "elephant",
+    "castle",
+    "eye",
+    "feather",
+    "circle",
+    "hedgehog",
+    "tree",
+    "monkey",
+    "telephone",
+    "necklace",
+    "map",
+    "bed",
+    "door",
+    "bread",
+    "flower",
+    "goatee",
+    "penguin",
+    "finger",
+    "bee",
+    "sweater",
+    "octopus",
+    "pizza",
+    "yoga",
+    "broom",
+    "giraffe",
+    "flamingo",
+    "mug",
+    "tractor",
+    "onion",
+    "tent",
+    "pool",
+    "leaf",
+    "wine_bottle",
+    "ladder",
+    "cruise_ship",
+    "hat",
+    "owl",
+    "mountain",
+    "sun",
+    "hot_air_balloon",
+    "submarine",
+    "parrot",
+    "donut",
+    "skyscraper",
+    "trombone",
+    "horse",
+    "waterslide",
+    "moustache",
+    "bowtie",
+    "skull",
+    "train",
+    "beach",
+    "truck",
+    "helicopter",
+    "vase",
+    "watermelon",
+    "squiggle",
+    "pineapple",
+    "washing_machine",
+    "whale",
+    "saxophone",
+    "cat",
+    "toothpaste",
+    "asparagus",
+    "firetruck",
+    "bridge",
+    "teapot",
+    "house_plant",
+    "see_saw",
+    "tornado",
+    "snorkel",
+    "blueberry",
+    "candle",
+    "sword",
+    "speedboat",
+    "stairs",
+    "crab",
+    "helmet",
+    "toothbrush",
+    "shorts",
+    "beard",
+    "envelope",
+    "raccoon",
+    "fish",
+    "rollerskates",
+    "car",
+    "table",
+    "crocodile",
+    "The_Eiffel_Tower",
+    "basket",
+    "bear",
+    "frog",
+    "sleeping_bag",
+    "stethoscope",
+    "face",
+    "windmill",
+    "banana",
+    "steak",
+    "sock",
+    "bracelet",
+    "sandwich",
+    "backpack",
+    "flashlight",
+    "triangle",
+    "cup",
+    "wristwatch",
+    "eyeglasses",
+    "dolphin",
+    "leg",
+    "scorpion",
+    "school_bus",
+    "binoculars",
+    "ocean",
+    "harp",
+    "animal_migration",
+    "lighthouse",
+    "book",
+    "popsicle",
+    "snowman",
+    "zebra",
+    "river",
+    "hamburger",
+    "coffee_cup",
+    "bottlecap",
+    "bicycle",
+    "pig",
+    "parachute",
+    "streetlight",
+    "lobster",
+    "carrot",
+    "dog",
+    "snail",
+    "duck",
+    "canoe",
+    "squirrel",
+    "television",
+    "spider",
+    "cake",
+    "motorbike",
+    "syringe",
+    "headphones",
+    "grass",
+    "rabbit",
+    "zigzag",
+    "tiger",
+    "nose",
+    "ice_cream",
+    "hexagon",
+    "bus",
+    "nail",
+    "fence",
+    "drums",
+    "toilet",
+    "spreadsheet",
+    "stove",
+    "violin",
+    "kangaroo",
+    "brain",
+    "shovel",
+    "strawberry",
+    "pillow",
+    "broccoli",
+    "wine_glass",
+    "pickup_truck",
+    "van",
+    "shark",
+    "shoe",
+    "mushroom",
+    "snake",
+    "sheep",
+    "hot_tub",
+    "teddy-bear",
+    "guitar",
+    "umbrella",
+    "golf_club",
+    "scissors",
+    "bench",
+    "skateboard",
+    "garden",
+    "lion",
+    "sailboat",
+    "palm_tree",
+    "square",
+    "spoon",
+    "butterfly",
+    "toaster",
+    "swan",
+    "grapes",
+    "sea_turtle",
+    "bird",
+    "hand",
+    "suitcase",
+    "pear",
+    "light_bulb"
+  ],
+  "class_to_label": {
+    "barn": 0,
+    "rifle": 1,
+    "dumbbell": 2,
+    "rhinoceros": 3,
+    "pond": 4,
+    "moon": 5,
+    "elephant": 6,
+    "castle": 7,
+    "eye": 8,
+    "feather": 9,
+    "circle": 10,
+    "hedgehog": 11,
+    "tree": 12,
+    "monkey": 13,
+    "telephone": 14,
+    "necklace": 15,
+    "map": 16,
+    "bed": 17,
+    "door": 18,
+    "bread": 19,
+    "flower": 20,
+    "goatee": 21,
+    "penguin": 22,
+    "finger": 23,
+    "bee": 24,
+    "sweater": 25,
+    "octopus": 26,
+    "pizza": 27,
+    "yoga": 28,
+    "broom": 29,
+    "giraffe": 30,
+    "flamingo": 31,
+    "mug": 32,
+    "tractor": 33,
+    "onion": 34,
+    "tent": 35,
+    "pool": 36,
+    "leaf": 37,
+    "wine_bottle": 38,
+    "ladder": 39,
+    "cruise_ship": 40,
+    "hat": 41,
+    "owl": 42,
+    "mountain": 43,
+    "sun": 44,
+    "hot_air_balloon": 45,
+    "submarine": 46,
+    "parrot": 47,
+    "donut": 48,
+    "skyscraper": 49,
+    "trombone": 50,
+    "horse": 51,
+    "waterslide": 52,
+    "moustache": 53,
+    "bowtie": 54,
+    "skull": 55,
+    "train": 56,
+    "beach": 57,
+    "truck": 58,
+    "helicopter": 59,
+    "vase": 60,
+    "watermelon": 61,
+    "squiggle": 62,
+    "pineapple": 63,
+    "washing_machine": 64,
+    "whale": 65,
+    "saxophone": 66,
+    "cat": 67,
+    "toothpaste": 68,
+    "asparagus": 69,
+    "firetruck": 70,
+    "bridge": 71,
+    "teapot": 72,
+    "house_plant": 73,
+    "see_saw": 74,
+    "tornado": 75,
+    "snorkel": 76,
+    "blueberry": 77,
+    "candle": 78,
+    "sword": 79,
+    "speedboat": 80,
+    "stairs": 81,
+    "crab": 82,
+    "helmet": 83,
+    "toothbrush": 84,
+    "shorts": 85,
+    "beard": 86,
+    "envelope": 87,
+    "raccoon": 88,
+    "fish": 89,
+    "rollerskates": 90,
+    "car": 91,
+    "table": 92,
+    "crocodile": 93,
+    "The_Eiffel_Tower": 94,
+    "basket": 95,
+    "bear": 96,
+    "frog": 97,
+    "sleeping_bag": 98,
+    "stethoscope": 99,
+    "face": 100,
+    "windmill": 101,
+    "banana": 102,
+    "steak": 103,
+    "sock": 104,
+    "bracelet": 105,
+    "sandwich": 106,
+    "backpack": 107,
+    "flashlight": 108,
+    "triangle": 109,
+    "cup": 110,
+    "wristwatch": 111,
+    "eyeglasses": 112,
+    "dolphin": 113,
+    "leg": 114,
+    "scorpion": 115,
+    "school_bus": 116,
+    "binoculars": 117,
+    "ocean": 118,
+    "harp": 119,
+    "animal_migration": 120,
+    "lighthouse": 121,
+    "book": 122,
+    "popsicle": 123,
+    "snowman": 124,
+    "zebra": 125,
+    "river": 126,
+    "hamburger": 127,
+    "coffee_cup": 128,
+    "bottlecap": 129,
+    "bicycle": 130,
+    "pig": 131,
+    "parachute": 132,
+    "streetlight": 133,
+    "lobster": 134,
+    "carrot": 135,
+    "dog": 136,
+    "snail": 137,
+    "duck": 138,
+    "canoe": 139,
+    "squirrel": 140,
+    "television": 141,
+    "spider": 142,
+    "cake": 143,
+    "motorbike": 144,
+    "syringe": 145,
+    "headphones": 146,
+    "grass": 147,
+    "rabbit": 148,
+    "zigzag": 149,
+    "tiger": 150,
+    "nose": 151,
+    "ice_cream": 152,
+    "hexagon": 153,
+    "bus": 154,
+    "nail": 155,
+    "fence": 156,
+    "drums": 157,
+    "toilet": 158,
+    "spreadsheet": 159,
+    "stove": 160,
+    "violin": 161,
+    "kangaroo": 162,
+    "brain": 163,
+    "shovel": 164,
+    "strawberry": 165,
+    "pillow": 166,
+    "broccoli": 167,
+    "wine_glass": 168,
+    "pickup_truck": 169,
+    "van": 170,
+    "shark": 171,
+    "shoe": 172,
+    "mushroom": 173,
+    "snake": 174,
+    "sheep": 175,
+    "hot_tub": 176,
+    "teddy-bear": 177,
+    "guitar": 178,
+    "umbrella": 179,
+    "golf_club": 180,
+    "scissors": 181,
+    "bench": 182,
+    "skateboard": 183,
+    "garden": 184,
+    "lion": 185,
+    "sailboat": 186,
+    "palm_tree": 187,
+    "square": 188,
+    "spoon": 189,
+    "butterfly": 190,
+    "toaster": 191,
+    "swan": 192,
+    "grapes": 193,
+    "sea_turtle": 194,
+    "bird": 195,
+    "hand": 196,
+    "suitcase": 197,
+    "pear": 198,
+    "light_bulb": 199
+  },
+  "class_to_task_domain": {
+    "barn": "real",
+    "rifle": "real",
+    "dumbbell": "real",
+    "rhinoceros": "real",
+    "pond": "real",
+    "moon": "real",
+    "elephant": "real",
+    "castle": "real",
+    "eye": "real",
+    "feather": "real",
+    "circle": "real",
+    "hedgehog": "real",
+    "tree": "real",
+    "monkey": "real",
+    "telephone": "real",
+    "necklace": "real",
+    "map": "real",
+    "bed": "real",
+    "door": "real",
+    "bread": "real",
+    "flower": "clipart",
+    "goatee": "clipart",
+    "penguin": "clipart",
+    "finger": "clipart",
+    "bee": "clipart",
+    "sweater": "clipart",
+    "octopus": "clipart",
+    "pizza": "clipart",
+    "yoga": "clipart",
+    "broom": "clipart",
+    "giraffe": "clipart",
+    "flamingo": "clipart",
+    "mug": "clipart",
+    "tractor": "clipart",
+    "onion": "clipart",
+    "tent": "clipart",
+    "pool": "clipart",
+    "leaf": "clipart",
+    "wine_bottle": "clipart",
+    "ladder": "clipart",
+    "cruise_ship": "painting",
+    "hat": "painting",
+    "owl": "painting",
+    "mountain": "painting",
+    "sun": "painting",
+    "hot_air_balloon": "painting",
+    "submarine": "painting",
+    "parrot": "painting",
+    "donut": "painting",
+    "skyscraper": "painting",
+    "trombone": "painting",
+    "horse": "painting",
+    "waterslide": "painting",
+    "moustache": "painting",
+    "bowtie": "painting",
+    "skull": "painting",
+    "train": "painting",
+    "beach": "painting",
+    "truck": "painting",
+    "helicopter": "painting",
+    "vase": "sketch",
+    "watermelon": "sketch",
+    "squiggle": "sketch",
+    "pineapple": "sketch",
+    "washing_machine": "sketch",
+    "whale": "sketch",
+    "saxophone": "sketch",
+    "cat": "sketch",
+    "toothpaste": "sketch",
+    "asparagus": "sketch",
+    "firetruck": "sketch",
+    "bridge": "sketch",
+    "teapot": "sketch",
+    "house_plant": "sketch",
+    "see_saw": "sketch",
+    "tornado": "sketch",
+    "snorkel": "sketch",
+    "blueberry": "sketch",
+    "candle": "sketch",
+    "sword": "sketch",
+    "speedboat": "infograph",
+    "stairs": "infograph",
+    "crab": "infograph",
+    "helmet": "infograph",
+    "toothbrush": "infograph",
+    "shorts": "infograph",
+    "beard": "infograph",
+    "envelope": "infograph",
+    "raccoon": "infograph",
+    "fish": "infograph",
+    "rollerskates": "infograph",
+    "car": "infograph",
+    "table": "infograph",
+    "crocodile": "infograph",
+    "The_Eiffel_Tower": "infograph",
+    "basket": "infograph",
+    "bear": "infograph",
+    "frog": "infograph",
+    "sleeping_bag": "infograph",
+    "stethoscope": "infograph",
+    "face": "quickdraw",
+    "windmill": "quickdraw",
+    "banana": "quickdraw",
+    "steak": "quickdraw",
+    "sock": "quickdraw",
+    "bracelet": "quickdraw",
+    "sandwich": "quickdraw",
+    "backpack": "quickdraw",
+    "flashlight": "quickdraw",
+    "triangle": "quickdraw",
+    "cup": "quickdraw",
+    "wristwatch": "quickdraw",
+    "eyeglasses": "quickdraw",
+    "dolphin": "quickdraw",
+    "leg": "quickdraw",
+    "scorpion": "quickdraw",
+    "school_bus": "quickdraw",
+    "binoculars": "quickdraw",
+    "ocean": "quickdraw",
+    "harp": "quickdraw",
+    "animal_migration": "real",
+    "lighthouse": "real",
+    "book": "real",
+    "popsicle": "real",
+    "snowman": "real",
+    "zebra": "real",
+    "river": "real",
+    "hamburger": "real",
+    "coffee_cup": "real",
+    "bottlecap": "real",
+    "bicycle": "real",
+    "pig": "real",
+    "parachute": "real",
+    "streetlight": "real",
+    "lobster": "real",
+    "carrot": "real",
+    "dog": "real",
+    "snail": "real",
+    "duck": "real",
+    "canoe": "real",
+    "squirrel": "clipart",
+    "television": "clipart",
+    "spider": "clipart",
+    "cake": "clipart",
+    "motorbike": "clipart",
+    "syringe": "clipart",
+    "headphones": "clipart",
+    "grass": "clipart",
+    "rabbit": "clipart",
+    "zigzag": "clipart",
+    "tiger": "clipart",
+    "nose": "clipart",
+    "ice_cream": "clipart",
+    "hexagon": "clipart",
+    "bus": "clipart",
+    "nail": "clipart",
+    "fence": "clipart",
+    "drums": "clipart",
+    "toilet": "clipart",
+    "spreadsheet": "clipart",
+    "stove": "painting",
+    "violin": "painting",
+    "kangaroo": "painting",
+    "brain": "painting",
+    "shovel": "painting",
+    "strawberry": "painting",
+    "pillow": "painting",
+    "broccoli": "painting",
+    "wine_glass": "painting",
+    "pickup_truck": "painting",
+    "van": "painting",
+    "shark": "painting",
+    "shoe": "painting",
+    "mushroom": "painting",
+    "snake": "painting",
+    "sheep": "painting",
+    "hot_tub": "painting",
+    "teddy-bear": "painting",
+    "guitar": "painting",
+    "umbrella": "painting",
+    "golf_club": "sketch",
+    "scissors": "sketch",
+    "bench": "sketch",
+    "skateboard": "sketch",
+    "garden": "sketch",
+    "lion": "sketch",
+    "sailboat": "sketch",
+    "palm_tree": "sketch",
+    "square": "sketch",
+    "spoon": "sketch",
+    "butterfly": "sketch",
+    "toaster": "sketch",
+    "swan": "sketch",
+    "grapes": "sketch",
+    "sea_turtle": "sketch",
+    "bird": "sketch",
+    "hand": "sketch",
+    "suitcase": "sketch",
+    "pear": "sketch",
+    "light_bulb": "sketch"
+  },
+  "label_to_train_domains": {
+    "24": [
+      "clipart"
+    ],
+    "29": [
+      "clipart"
+    ],
+    "154": [
+      "clipart"
+    ],
+    "143": [
+      "clipart"
+    ],
+    "157": [
+      "clipart"
+    ],
+    "156": [
+      "clipart"
+    ],
+    "23": [
+      "clipart"
+    ],
+    "31": [
+      "clipart"
+    ],
+    "20": [
+      "clipart"
+    ],
+    "30": [
+      "clipart"
+    ],
+    "21": [
+      "clipart"
+    ],
+    "147": [
+      "clipart"
+    ],
+    "146": [
+      "clipart"
+    ],
+    "153": [
+      "clipart"
+    ],
+    "152": [
+      "clipart"
+    ],
+    "39": [
+      "clipart"
+    ],
+    "37": [
+      "clipart"
+    ],
+    "144": [
+      "clipart"
+    ],
+    "32": [
+      "clipart"
+    ],
+    "155": [
+      "clipart"
+    ],
+    "151": [
+      "clipart"
+    ],
+    "26": [
+      "clipart"
+    ],
+    "34": [
+      "clipart"
+    ],
+    "22": [
+      "clipart"
+    ],
+    "27": [
+      "clipart"
+    ],
+    "36": [
+      "clipart"
+    ],
+    "148": [
+      "clipart"
+    ],
+    "142": [
+      "clipart"
+    ],
+    "159": [
+      "clipart"
+    ],
+    "140": [
+      "clipart"
+    ],
+    "25": [
+      "clipart"
+    ],
+    "145": [
+      "clipart"
+    ],
+    "141": [
+      "clipart"
+    ],
+    "35": [
+      "clipart"
+    ],
+    "150": [
+      "clipart"
+    ],
+    "158": [
+      "clipart"
+    ],
+    "33": [
+      "clipart"
+    ],
+    "38": [
+      "clipart"
+    ],
+    "28": [
+      "clipart"
+    ],
+    "149": [
+      "clipart"
+    ],
+    "95": [
+      "infograph"
+    ],
+    "96": [
+      "infograph"
+    ],
+    "86": [
+      "infograph"
+    ],
+    "91": [
+      "infograph"
+    ],
+    "82": [
+      "infograph"
+    ],
+    "93": [
+      "infograph"
+    ],
+    "87": [
+      "infograph"
+    ],
+    "89": [
+      "infograph"
+    ],
+    "97": [
+      "infograph"
+    ],
+    "83": [
+      "infograph"
+    ],
+    "88": [
+      "infograph"
+    ],
+    "90": [
+      "infograph"
+    ],
+    "85": [
+      "infograph"
+    ],
+    "98": [
+      "infograph"
+    ],
+    "80": [
+      "infograph"
+    ],
+    "81": [
+      "infograph"
+    ],
+    "99": [
+      "infograph"
+    ],
+    "92": [
+      "infograph"
+    ],
+    "94": [
+      "infograph"
+    ],
+    "84": [
+      "infograph"
+    ],
+    "57": [
+      "painting"
+    ],
+    "54": [
+      "painting"
+    ],
+    "163": [
+      "painting"
+    ],
+    "167": [
+      "painting"
+    ],
+    "40": [
+      "painting"
+    ],
+    "48": [
+      "painting"
+    ],
+    "178": [
+      "painting"
+    ],
+    "41": [
+      "painting"
+    ],
+    "59": [
+      "painting"
+    ],
+    "51": [
+      "painting"
+    ],
+    "45": [
+      "painting"
+    ],
+    "176": [
+      "painting"
+    ],
+    "162": [
+      "painting"
+    ],
+    "43": [
+      "painting"
+    ],
+    "53": [
+      "painting"
+    ],
+    "173": [
+      "painting"
+    ],
+    "42": [
+      "painting"
+    ],
+    "47": [
+      "painting"
+    ],
+    "169": [
+      "painting"
+    ],
+    "166": [
+      "painting"
+    ],
+    "171": [
+      "painting"
+    ],
+    "175": [
+      "painting"
+    ],
+    "172": [
+      "painting"
+    ],
+    "164": [
+      "painting"
+    ],
+    "55": [
+      "painting"
+    ],
+    "49": [
+      "painting"
+    ],
+    "174": [
+      "painting"
+    ],
+    "160": [
+      "painting"
+    ],
+    "165": [
+      "painting"
+    ],
+    "46": [
+      "painting"
+    ],
+    "44": [
+      "painting"
+    ],
+    "177": [
+      "painting"
+    ],
+    "56": [
+      "painting"
+    ],
+    "50": [
+      "painting"
+    ],
+    "58": [
+      "painting"
+    ],
+    "179": [
+      "painting"
+    ],
+    "170": [
+      "painting"
+    ],
+    "161": [
+      "painting"
+    ],
+    "52": [
+      "painting"
+    ],
+    "168": [
+      "painting"
+    ],
+    "107": [
+      "quickdraw"
+    ],
+    "102": [
+      "quickdraw"
+    ],
+    "117": [
+      "quickdraw"
+    ],
+    "105": [
+      "quickdraw"
+    ],
+    "110": [
+      "quickdraw"
+    ],
+    "113": [
+      "quickdraw"
+    ],
+    "112": [
+      "quickdraw"
+    ],
+    "100": [
+      "quickdraw"
+    ],
+    "108": [
+      "quickdraw"
+    ],
+    "119": [
+      "quickdraw"
+    ],
+    "114": [
+      "quickdraw"
+    ],
+    "118": [
+      "quickdraw"
+    ],
+    "106": [
+      "quickdraw"
+    ],
+    "116": [
+      "quickdraw"
+    ],
+    "115": [
+      "quickdraw"
+    ],
+    "104": [
+      "quickdraw"
+    ],
+    "103": [
+      "quickdraw"
+    ],
+    "109": [
+      "quickdraw"
+    ],
+    "101": [
+      "quickdraw"
+    ],
+    "111": [
+      "quickdraw"
+    ],
+    "120": [
+      "real"
+    ],
+    "0": [
+      "real"
+    ],
+    "17": [
+      "real"
+    ],
+    "130": [
+      "real"
+    ],
+    "122": [
+      "real"
+    ],
+    "129": [
+      "real"
+    ],
+    "19": [
+      "real"
+    ],
+    "139": [
+      "real"
+    ],
+    "135": [
+      "real"
+    ],
+    "7": [
+      "real"
+    ],
+    "10": [
+      "real"
+    ],
+    "128": [
+      "real"
+    ],
+    "136": [
+      "real"
+    ],
+    "18": [
+      "real"
+    ],
+    "138": [
+      "real"
+    ],
+    "2": [
+      "real"
+    ],
+    "6": [
+      "real"
+    ],
+    "8": [
+      "real"
+    ],
+    "9": [
+      "real"
+    ],
+    "127": [
+      "real"
+    ],
+    "11": [
+      "real"
+    ],
+    "121": [
+      "real"
+    ],
+    "134": [
+      "real"
+    ],
+    "16": [
+      "real"
+    ],
+    "13": [
+      "real"
+    ],
+    "5": [
+      "real"
+    ],
+    "15": [
+      "real"
+    ],
+    "132": [
+      "real"
+    ],
+    "131": [
+      "real"
+    ],
+    "4": [
+      "real"
+    ],
+    "123": [
+      "real"
+    ],
+    "3": [
+      "real"
+    ],
+    "1": [
+      "real"
+    ],
+    "126": [
+      "real"
+    ],
+    "137": [
+      "real"
+    ],
+    "124": [
+      "real"
+    ],
+    "133": [
+      "real"
+    ],
+    "14": [
+      "real"
+    ],
+    "12": [
+      "real"
+    ],
+    "125": [
+      "real"
+    ],
+    "69": [
+      "sketch"
+    ],
+    "182": [
+      "sketch"
+    ],
+    "195": [
+      "sketch"
+    ],
+    "77": [
+      "sketch"
+    ],
+    "71": [
+      "sketch"
+    ],
+    "190": [
+      "sketch"
+    ],
+    "78": [
+      "sketch"
+    ],
+    "67": [
+      "sketch"
+    ],
+    "70": [
+      "sketch"
+    ],
+    "184": [
+      "sketch"
+    ],
+    "180": [
+      "sketch"
+    ],
+    "193": [
+      "sketch"
+    ],
+    "196": [
+      "sketch"
+    ],
+    "73": [
+      "sketch"
+    ],
+    "199": [
+      "sketch"
+    ],
+    "185": [
+      "sketch"
+    ],
+    "187": [
+      "sketch"
+    ],
+    "198": [
+      "sketch"
+    ],
+    "63": [
+      "sketch"
+    ],
+    "186": [
+      "sketch"
+    ],
+    "66": [
+      "sketch"
+    ],
+    "181": [
+      "sketch"
+    ],
+    "194": [
+      "sketch"
+    ],
+    "74": [
+      "sketch"
+    ],
+    "183": [
+      "sketch"
+    ],
+    "76": [
+      "sketch"
+    ],
+    "189": [
+      "sketch"
+    ],
+    "188": [
+      "sketch"
+    ],
+    "62": [
+      "sketch"
+    ],
+    "197": [
+      "sketch"
+    ],
+    "192": [
+      "sketch"
+    ],
+    "79": [
+      "sketch"
+    ],
+    "72": [
+      "sketch"
+    ],
+    "191": [
+      "sketch"
+    ],
+    "68": [
+      "sketch"
+    ],
+    "75": [
+      "sketch"
+    ],
+    "60": [
+      "sketch"
+    ],
+    "64": [
+      "sketch"
+    ],
+    "61": [
+      "sketch"
+    ],
+    "65": [
+      "sketch"
+    ]
+  },
+  "label_to_train_counts": {
+    "24": {
+      "clipart": 141
+    },
+    "29": {
+      "clipart": 118
+    },
+    "154": {
+      "clipart": 70
+    },
+    "143": {
+      "clipart": 59
+    },
+    "157": {
+      "clipart": 135
+    },
+    "156": {
+      "clipart": 114
+    },
+    "23": {
+      "clipart": 107
+    },
+    "31": {
+      "clipart": 191
+    },
+    "20": {
+      "clipart": 177
+    },
+    "30": {
+      "clipart": 92
+    },
+    "21": {
+      "clipart": 156
+    },
+    "147": {
+      "clipart": 100
+    },
+    "146": {
+      "clipart": 197
+    },
+    "153": {
+      "clipart": 135
+    },
+    "152": {
+      "clipart": 112
+    },
+    "39": {
+      "clipart": 51
+    },
+    "37": {
+      "clipart": 8
+    },
+    "144": {
+      "clipart": 29
+    },
+    "32": {
+      "clipart": 109
+    },
+    "155": {
+      "clipart": 27
+    },
+    "151": {
+      "clipart": 39
+    },
+    "26": {
+      "clipart": 133
+    },
+    "34": {
+      "clipart": 60
+    },
+    "22": {
+      "clipart": 84
+    },
+    "27": {
+      "clipart": 53
+    },
+    "36": {
+      "clipart": 96
+    },
+    "148": {
+      "clipart": 72
+    },
+    "142": {
+      "clipart": 112
+    },
+    "159": {
+      "clipart": 130
+    },
+    "140": {
+      "clipart": 154
+    },
+    "25": {
+      "clipart": 155
+    },
+    "145": {
+      "clipart": 88
+    },
+    "141": {
+      "clipart": 94
+    },
+    "35": {
+      "clipart": 107
+    },
+    "150": {
+      "clipart": 220
+    },
+    "158": {
+      "clipart": 119
+    },
+    "33": {
+      "clipart": 106
+    },
+    "38": {
+      "clipart": 159
+    },
+    "28": {
+      "clipart": 114
+    },
+    "149": {
+      "clipart": 221
+    },
+    "95": {
+      "infograph": 153
+    },
+    "96": {
+      "infograph": 55
+    },
+    "86": {
+      "infograph": 65
+    },
+    "91": {
+      "infograph": 249
+    },
+    "82": {
+      "infograph": 35
+    },
+    "93": {
+      "infograph": 38
+    },
+    "87": {
+      "infograph": 42
+    },
+    "89": {
+      "infograph": 134
+    },
+    "97": {
+      "infograph": 81
+    },
+    "83": {
+      "infograph": 172
+    },
+    "88": {
+      "infograph": 16
+    },
+    "90": {
+      "infograph": 34
+    },
+    "85": {
+      "infograph": 19
+    },
+    "98": {
+      "infograph": 9
+    },
+    "80": {
+      "infograph": 52
+    },
+    "81": {
+      "infograph": 196
+    },
+    "99": {
+      "infograph": 74
+    },
+    "92": {
+      "infograph": 505
+    },
+    "94": {
+      "infograph": 132
+    },
+    "84": {
+      "infograph": 346
+    },
+    "57": {
+      "painting": 349
+    },
+    "54": {
+      "painting": 197
+    },
+    "163": {
+      "painting": 163
+    },
+    "167": {
+      "painting": 70
+    },
+    "40": {
+      "painting": 153
+    },
+    "48": {
+      "painting": 261
+    },
+    "178": {
+      "painting": 142
+    },
+    "41": {
+      "painting": 275
+    },
+    "59": {
+      "painting": 179
+    },
+    "51": {
+      "painting": 364
+    },
+    "45": {
+      "painting": 317
+    },
+    "176": {
+      "painting": 136
+    },
+    "162": {
+      "painting": 146
+    },
+    "43": {
+      "painting": 223
+    },
+    "53": {
+      "painting": 291
+    },
+    "173": {
+      "painting": 176
+    },
+    "42": {
+      "painting": 346
+    },
+    "47": {
+      "painting": 234
+    },
+    "169": {
+      "painting": 99
+    },
+    "166": {
+      "painting": 95
+    },
+    "171": {
+      "painting": 188
+    },
+    "175": {
+      "painting": 233
+    },
+    "172": {
+      "painting": 182
+    },
+    "164": {
+      "painting": 77
+    },
+    "55": {
+      "painting": 130
+    },
+    "49": {
+      "painting": 124
+    },
+    "174": {
+      "painting": 295
+    },
+    "160": {
+      "painting": 9
+    },
+    "165": {
+      "painting": 261
+    },
+    "46": {
+      "painting": 280
+    },
+    "44": {
+      "painting": 246
+    },
+    "177": {
+      "painting": 192
+    },
+    "56": {
+      "painting": 282
+    },
+    "50": {
+      "painting": 122
+    },
+    "58": {
+      "painting": 80
+    },
+    "179": {
+      "painting": 201
+    },
+    "170": {
+      "painting": 8
+    },
+    "161": {
+      "painting": 139
+    },
+    "52": {
+      "painting": 4
+    },
+    "168": {
+      "painting": 113
+    },
+    "107": {
+      "quickdraw": 350
+    },
+    "102": {
+      "quickdraw": 350
+    },
+    "117": {
+      "quickdraw": 350
+    },
+    "105": {
+      "quickdraw": 350
+    },
+    "110": {
+      "quickdraw": 350
+    },
+    "113": {
+      "quickdraw": 350
+    },
+    "112": {
+      "quickdraw": 350
+    },
+    "100": {
+      "quickdraw": 350
+    },
+    "108": {
+      "quickdraw": 350
+    },
+    "119": {
+      "quickdraw": 350
+    },
+    "114": {
+      "quickdraw": 350
+    },
+    "118": {
+      "quickdraw": 350
+    },
+    "106": {
+      "quickdraw": 350
+    },
+    "116": {
+      "quickdraw": 350
+    },
+    "115": {
+      "quickdraw": 350
+    },
+    "104": {
+      "quickdraw": 350
+    },
+    "103": {
+      "quickdraw": 350
+    },
+    "109": {
+      "quickdraw": 350
+    },
+    "101": {
+      "quickdraw": 350
+    },
+    "111": {
+      "quickdraw": 350
+    },
+    "120": {
+      "real": 310
+    },
+    "0": {
+      "real": 218
+    },
+    "17": {
+      "real": 506
+    },
+    "130": {
+      "real": 493
+    },
+    "122": {
+      "real": 498
+    },
+    "129": {
+      "real": 406
+    },
+    "19": {
+      "real": 553
+    },
+    "139": {
+      "real": 490
+    },
+    "135": {
+      "real": 393
+    },
+    "7": {
+      "real": 477
+    },
+    "10": {
+      "real": 167
+    },
+    "128": {
+      "real": 432
+    },
+    "136": {
+      "real": 545
+    },
+    "18": {
+      "real": 252
+    },
+    "138": {
+      "real": 281
+    },
+    "2": {
+      "real": 402
+    },
+    "6": {
+      "real": 549
+    },
+    "8": {
+      "real": 475
+    },
+    "9": {
+      "real": 335
+    },
+    "127": {
+      "real": 391
+    },
+    "11": {
+      "real": 507
+    },
+    "121": {
+      "real": 499
+    },
+    "134": {
+      "real": 453
+    },
+    "16": {
+      "real": 352
+    },
+    "13": {
+      "real": 489
+    },
+    "5": {
+      "real": 396
+    },
+    "15": {
+      "real": 485
+    },
+    "132": {
+      "real": 432
+    },
+    "131": {
+      "real": 400
+    },
+    "4": {
+      "real": 543
+    },
+    "123": {
+      "real": 439
+    },
+    "3": {
+      "real": 478
+    },
+    "1": {
+      "real": 363
+    },
+    "126": {
+      "real": 453
+    },
+    "137": {
+      "real": 325
+    },
+    "124": {
+      "real": 79
+    },
+    "133": {
+      "real": 320
+    },
+    "14": {
+      "real": 333
+    },
+    "12": {
+      "real": 373
+    },
+    "125": {
+      "real": 466
+    },
+    "69": {
+      "sketch": 144
+    },
+    "182": {
+      "sketch": 190
+    },
+    "195": {
+      "sketch": 214
+    },
+    "77": {
+      "sketch": 89
+    },
+    "71": {
+      "sketch": 234
+    },
+    "190": {
+      "sketch": 174
+    },
+    "78": {
+      "sketch": 53
+    },
+    "67": {
+      "sketch": 91
+    },
+    "70": {
+      "sketch": 229
+    },
+    "184": {
+      "sketch": 67
+    },
+    "180": {
+      "sketch": 483
+    },
+    "193": {
+      "sketch": 200
+    },
+    "196": {
+      "sketch": 166
+    },
+    "73": {
+      "sketch": 109
+    },
+    "199": {
+      "sketch": 283
+    },
+    "185": {
+      "sketch": 230
+    },
+    "187": {
+      "sketch": 113
+    },
+    "198": {
+      "sketch": 127
+    },
+    "63": {
+      "sketch": 91
+    },
+    "186": {
+      "sketch": 251
+    },
+    "66": {
+      "sketch": 215
+    },
+    "181": {
+      "sketch": 302
+    },
+    "194": {
+      "sketch": 177
+    },
+    "74": {
+      "sketch": 362
+    },
+    "183": {
+      "sketch": 290
+    },
+    "76": {
+      "sketch": 272
+    },
+    "189": {
+      "sketch": 280
+    },
+    "188": {
+      "sketch": 501
+    },
+    "62": {
+      "sketch": 306
+    },
+    "197": {
+      "sketch": 216
+    },
+    "192": {
+      "sketch": 163
+    },
+    "79": {
+      "sketch": 261
+    },
+    "72": {
+      "sketch": 220
+    },
+    "191": {
+      "sketch": 183
+    },
+    "68": {
+      "sketch": 108
+    },
+    "75": {
+      "sketch": 135
+    },
+    "60": {
+      "sketch": 126
+    },
+    "64": {
+      "sketch": 105
+    },
+    "61": {
+      "sketch": 88
+    },
+    "65": {
+      "sketch": 189
+    }
+  },
+  "label_to_test_counts": {
+    "24": {
+      "clipart": 61
+    },
+    "29": {
+      "clipart": 52
+    },
+    "154": {
+      "clipart": 31
+    },
+    "143": {
+      "clipart": 23
+    },
+    "157": {
+      "clipart": 59
+    },
+    "156": {
+      "clipart": 50
+    },
+    "23": {
+      "clipart": 46
+    },
+    "31": {
+      "clipart": 83
+    },
+    "20": {
+      "clipart": 75
+    },
+    "30": {
+      "clipart": 41
+    },
+    "21": {
+      "clipart": 67
+    },
+    "147": {
+      "clipart": 45
+    },
+    "146": {
+      "clipart": 86
+    },
+    "153": {
+      "clipart": 59
+    },
+    "152": {
+      "clipart": 48
+    },
+    "39": {
+      "clipart": 23
+    },
+    "37": {
+      "clipart": 4
+    },
+    "144": {
+      "clipart": 13
+    },
+    "32": {
+      "clipart": 43
+    },
+    "155": {
+      "clipart": 13
+    },
+    "151": {
+      "clipart": 18
+    },
+    "26": {
+      "clipart": 57
+    },
+    "34": {
+      "clipart": 27
+    },
+    "22": {
+      "clipart": 37
+    },
+    "27": {
+      "clipart": 24
+    },
+    "36": {
+      "clipart": 42
+    },
+    "148": {
+      "clipart": 31
+    },
+    "142": {
+      "clipart": 49
+    },
+    "159": {
+      "clipart": 56
+    },
+    "140": {
+      "clipart": 67
+    },
+    "25": {
+      "clipart": 67
+    },
+    "145": {
+      "clipart": 37
+    },
+    "141": {
+      "clipart": 41
+    },
+    "35": {
+      "clipart": 46
+    },
+    "150": {
+      "clipart": 94
+    },
+    "158": {
+      "clipart": 53
+    },
+    "33": {
+      "clipart": 47
+    },
+    "38": {
+      "clipart": 69
+    },
+    "28": {
+      "clipart": 50
+    },
+    "149": {
+      "clipart": 96
+    },
+    "95": {
+      "infograph": 66
+    },
+    "96": {
+      "infograph": 25
+    },
+    "86": {
+      "infograph": 28
+    },
+    "91": {
+      "infograph": 107
+    },
+    "82": {
+      "infograph": 15
+    },
+    "93": {
+      "infograph": 17
+    },
+    "87": {
+      "infograph": 18
+    },
+    "89": {
+      "infograph": 59
+    },
+    "97": {
+      "infograph": 36
+    },
+    "83": {
+      "infograph": 77
+    },
+    "88": {
+      "infograph": 7
+    },
+    "90": {
+      "infograph": 15
+    },
+    "85": {
+      "infograph": 8
+    },
+    "98": {
+      "infograph": 5
+    },
+    "80": {
+      "infograph": 22
+    },
+    "81": {
+      "infograph": 85
+    },
+    "99": {
+      "infograph": 33
+    },
+    "92": {
+      "infograph": 215
+    },
+    "94": {
+      "infograph": 57
+    },
+    "84": {
+      "infograph": 150
+    },
+    "57": {
+      "painting": 150
+    },
+    "54": {
+      "painting": 83
+    },
+    "163": {
+      "painting": 70
+    },
+    "167": {
+      "painting": 30
+    },
+    "40": {
+      "painting": 67
+    },
+    "48": {
+      "painting": 112
+    },
+    "178": {
+      "painting": 60
+    },
+    "41": {
+      "painting": 119
+    },
+    "59": {
+      "painting": 78
+    },
+    "51": {
+      "painting": 157
+    },
+    "45": {
+      "painting": 136
+    },
+    "176": {
+      "painting": 59
+    },
+    "162": {
+      "painting": 65
+    },
+    "43": {
+      "painting": 96
+    },
+    "53": {
+      "painting": 121
+    },
+    "173": {
+      "painting": 77
+    },
+    "42": {
+      "painting": 149
+    },
+    "47": {
+      "painting": 100
+    },
+    "169": {
+      "painting": 43
+    },
+    "166": {
+      "painting": 42
+    },
+    "171": {
+      "painting": 81
+    },
+    "175": {
+      "painting": 100
+    },
+    "172": {
+      "painting": 78
+    },
+    "164": {
+      "painting": 33
+    },
+    "55": {
+      "painting": 56
+    },
+    "49": {
+      "painting": 53
+    },
+    "174": {
+      "painting": 128
+    },
+    "160": {
+      "painting": 5
+    },
+    "165": {
+      "painting": 116
+    },
+    "46": {
+      "painting": 127
+    },
+    "44": {
+      "painting": 87
+    },
+    "177": {
+      "painting": 83
+    },
+    "56": {
+      "painting": 122
+    },
+    "50": {
+      "painting": 53
+    },
+    "58": {
+      "painting": 43
+    },
+    "179": {
+      "painting": 86
+    },
+    "170": {
+      "painting": 4
+    },
+    "161": {
+      "painting": 60
+    },
+    "52": {
+      "painting": 4
+    },
+    "168": {
+      "painting": 49
+    },
+    "107": {
+      "quickdraw": 150
+    },
+    "102": {
+      "quickdraw": 150
+    },
+    "117": {
+      "quickdraw": 150
+    },
+    "105": {
+      "quickdraw": 150
+    },
+    "110": {
+      "quickdraw": 150
+    },
+    "113": {
+      "quickdraw": 150
+    },
+    "112": {
+      "quickdraw": 150
+    },
+    "100": {
+      "quickdraw": 150
+    },
+    "108": {
+      "quickdraw": 150
+    },
+    "119": {
+      "quickdraw": 150
+    },
+    "114": {
+      "quickdraw": 150
+    },
+    "118": {
+      "quickdraw": 150
+    },
+    "106": {
+      "quickdraw": 150
+    },
+    "116": {
+      "quickdraw": 150
+    },
+    "115": {
+      "quickdraw": 150
+    },
+    "104": {
+      "quickdraw": 150
+    },
+    "103": {
+      "quickdraw": 150
+    },
+    "109": {
+      "quickdraw": 150
+    },
+    "101": {
+      "quickdraw": 150
+    },
+    "111": {
+      "quickdraw": 150
+    },
+    "120": {
+      "real": 134
+    },
+    "0": {
+      "real": 94
+    },
+    "17": {
+      "real": 218
+    },
+    "130": {
+      "real": 211
+    },
+    "122": {
+      "real": 213
+    },
+    "129": {
+      "real": 178
+    },
+    "19": {
+      "real": 239
+    },
+    "139": {
+      "real": 211
+    },
+    "135": {
+      "real": 170
+    },
+    "7": {
+      "real": 205
+    },
+    "10": {
+      "real": 75
+    },
+    "128": {
+      "real": 186
+    },
+    "136": {
+      "real": 234
+    },
+    "18": {
+      "real": 111
+    },
+    "138": {
+      "real": 120
+    },
+    "2": {
+      "real": 172
+    },
+    "6": {
+      "real": 234
+    },
+    "8": {
+      "real": 204
+    },
+    "9": {
+      "real": 146
+    },
+    "127": {
+      "real": 167
+    },
+    "11": {
+      "real": 218
+    },
+    "121": {
+      "real": 215
+    },
+    "134": {
+      "real": 195
+    },
+    "16": {
+      "real": 152
+    },
+    "13": {
+      "real": 210
+    },
+    "5": {
+      "real": 170
+    },
+    "15": {
+      "real": 206
+    },
+    "132": {
+      "real": 184
+    },
+    "131": {
+      "real": 173
+    },
+    "4": {
+      "real": 234
+    },
+    "123": {
+      "real": 183
+    },
+    "3": {
+      "real": 204
+    },
+    "1": {
+      "real": 156
+    },
+    "126": {
+      "real": 196
+    },
+    "137": {
+      "real": 140
+    },
+    "124": {
+      "real": 35
+    },
+    "133": {
+      "real": 138
+    },
+    "14": {
+      "real": 144
+    },
+    "12": {
+      "real": 157
+    },
+    "125": {
+      "real": 203
+    },
+    "69": {
+      "sketch": 63
+    },
+    "182": {
+      "sketch": 81
+    },
+    "195": {
+      "sketch": 92
+    },
+    "77": {
+      "sketch": 39
+    },
+    "71": {
+      "sketch": 100
+    },
+    "190": {
+      "sketch": 75
+    },
+    "78": {
+      "sketch": 24
+    },
+    "67": {
+      "sketch": 39
+    },
+    "70": {
+      "sketch": 99
+    },
+    "184": {
+      "sketch": 30
+    },
+    "180": {
+      "sketch": 207
+    },
+    "193": {
+      "sketch": 87
+    },
+    "196": {
+      "sketch": 70
+    },
+    "73": {
+      "sketch": 47
+    },
+    "199": {
+      "sketch": 122
+    },
+    "185": {
+      "sketch": 99
+    },
+    "187": {
+      "sketch": 50
+    },
+    "198": {
+      "sketch": 55
+    },
+    "63": {
+      "sketch": 40
+    },
+    "186": {
+      "sketch": 109
+    },
+    "66": {
+      "sketch": 93
+    },
+    "181": {
+      "sketch": 130
+    },
+    "194": {
+      "sketch": 77
+    },
+    "74": {
+      "sketch": 154
+    },
+    "183": {
+      "sketch": 125
+    },
+    "76": {
+      "sketch": 118
+    },
+    "189": {
+      "sketch": 120
+    },
+    "188": {
+      "sketch": 213
+    },
+    "62": {
+      "sketch": 131
+    },
+    "197": {
+      "sketch": 93
+    },
+    "192": {
+      "sketch": 70
+    },
+    "79": {
+      "sketch": 112
+    },
+    "72": {
+      "sketch": 95
+    },
+    "191": {
+      "sketch": 78
+    },
+    "68": {
+      "sketch": 43
+    },
+    "75": {
+      "sketch": 62
+    },
+    "60": {
+      "sketch": 56
+    },
+    "64": {
+      "sketch": 46
+    },
+    "61": {
+      "sketch": 39
+    },
+    "65": {
+      "sketch": 80
+    }
+  },
+  "missing_test_labels": [],
+  "num_train_samples": 45628,
+  "num_test_samples": 19655
+}
