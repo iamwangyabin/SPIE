@@ -15,6 +15,10 @@ from utils import factory
 from utils.data_manager import DataManager
 
 
+# -------------------------
+# Basic utils
+# -------------------------
+
 def set_random(seed: int):
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
@@ -27,18 +31,6 @@ def stable_softmax_np(logits: np.ndarray) -> np.ndarray:
     shifted = logits - np.max(logits, axis=1, keepdims=True)
     exp_logits = np.exp(shifted)
     return exp_logits / np.clip(exp_logits.sum(axis=1, keepdims=True), 1e-12, None)
-
-
-def logsumexp_np(x: np.ndarray, axis=1, keepdims=False):
-    max_value = np.max(x, axis=axis, keepdims=True)
-    out = max_value + np.log(np.exp(x - max_value).sum(axis=axis, keepdims=True) + 1e-12)
-    if not keepdims:
-        out = np.squeeze(out, axis=axis)
-    return out
-
-
-def sigmoid_np(x):
-    return 1.0 / (1.0 + np.exp(-x))
 
 
 def parse_csv_floats(value):
@@ -71,272 +63,26 @@ def to_jsonable(obj):
     return obj
 
 
-def clean_marginal_fusion_probs_np(model, shared_logits, expert_logits_by_task):
-    """
-    Clean posterior fusion:
-
-        p_final(c | x)
-        =
-        p_shared(y in task(c) | x)
-        *
-        p_expert(c | x, y in task(c))
-
-    No alpha, no temperature, no extra task-softmax.
-    """
-    p_shared = stable_softmax_np(shared_logits).astype(np.float32)
-    p_clean = np.zeros_like(p_shared, dtype=np.float32)
-
-    for task_id, (start_idx, end_idx) in enumerate(model.task_class_ranges):
-        task_mass = p_shared[:, start_idx:end_idx].sum(axis=1, keepdims=True)
-        local_prob = stable_softmax_np(expert_logits_by_task[task_id]).astype(np.float32)
-        p_clean[:, start_idx:end_idx] = task_mass * local_prob
-
-    return p_clean
+def print_metric(name, accy):
+    print(f"\n[{name}]")
+    print(f"top1: {accy['top1']:.2f}")
+    print(f"top5: {accy['top5']:.2f}")
+    print("grouped:", accy["grouped"])
 
 
-def product_marginal_fusion_probs_np(model, shared_logits, expert_logits_by_task):
-    p_shared = stable_softmax_np(shared_logits).astype(np.float32)
-    p_final = np.zeros_like(p_shared, dtype=np.float32)
-
-    for task_id, (start, end) in enumerate(model.task_class_ranges):
-        block = p_shared[:, start:end]
-        task_mass = block.sum(axis=1, keepdims=True)
-        shared_local = block / np.clip(task_mass, 1e-12, None)
-        expert_local = stable_softmax_np(expert_logits_by_task[task_id]).astype(np.float32)
-
-        local = shared_local * expert_local
-        local = local / np.clip(local.sum(axis=1, keepdims=True), 1e-12, None)
-
-        p_final[:, start:end] = task_mass * local
-
-    return p_final
+def parse_device(device_arg: str):
+    if device_arg.lower() == "cpu" or not torch.cuda.is_available():
+        return torch.device("cpu")
+    return torch.device(f"cuda:{device_arg}")
 
 
-def oracle_task_local_acc(model, shared_logits_np, expert_logits_by_task, y_true):
-    shared_correct = 0
-    expert_correct = 0
-    total = len(y_true)
-
-    for i, y in enumerate(y_true):
-        true_task = None
-        local_y = None
-        for task_id, (start, end) in enumerate(model.task_class_ranges):
-            if start <= y < end:
-                true_task = task_id
-                local_y = y - start
-                break
-
-        if true_task is None:
-            raise ValueError(f"Target {int(y)} does not belong to any task class range.")
-
-        start, end = model.task_class_ranges[true_task]
-        shared_local_pred = np.argmax(shared_logits_np[i, start:end])
-        expert_local_pred = np.argmax(expert_logits_by_task[true_task][i])
-
-        if shared_local_pred == local_y:
-            shared_correct += 1
-        if expert_local_pred == local_y:
-            expert_correct += 1
-
-    return {
-        "shared_oracle_task_local_top1": 100.0 * shared_correct / total,
-        "expert_oracle_task_local_top1": 100.0 * expert_correct / total,
-    }
+def get_task_ranges(model):
+    return list(model.task_class_ranges)
 
 
-def expert_ood_score_np(logits, score_type="energy"):
-    """
-    Larger score means the sample is more likely to be in-distribution for this expert.
-    """
-    if score_type == "energy":
-        return logsumexp_np(logits, axis=1) - np.log(logits.shape[1])
-
-    if score_type == "max_logit":
-        return np.max(logits, axis=1)
-
-    if score_type == "margin":
-        if logits.shape[1] < 2:
-            return np.zeros((logits.shape[0],), dtype=logits.dtype)
-        part = np.partition(logits, kth=-2, axis=1)
-        return part[:, -1] - part[:, -2]
-
-    if score_type == "msp":
-        prob = stable_softmax_np(logits)
-        return np.max(prob, axis=1)
-
-    if score_type == "neg_entropy":
-        prob = stable_softmax_np(logits)
-        entropy = -(prob * np.log(np.clip(prob, 1e-12, None))).sum(axis=1)
-        return -entropy
-
-    raise ValueError(f"Unknown score_type: {score_type}")
-
-
-def fit_threshold_balanced_acc(id_scores, ood_scores):
-    """
-    ID accepts when score > tau; OOD rejects when score <= tau.
-    """
-    if len(id_scores) == 0 or len(ood_scores) == 0:
-        return -np.inf, {
-            "balanced_acc": None,
-            "id_accept_rate": None,
-            "ood_reject_rate": None,
-        }
-
-    all_scores = np.concatenate([id_scores, ood_scores])
-    candidates = np.percentile(all_scores, np.linspace(0, 100, 501))
-    candidates = np.unique(candidates)
-
-    best_tau = candidates[0]
-    best_bal_acc = -1.0
-    best_id_accept = 0.0
-    best_ood_reject = 0.0
-
-    for tau in candidates:
-        id_accept = (id_scores > tau).mean()
-        ood_reject = (ood_scores <= tau).mean()
-        bal_acc = 0.5 * (id_accept + ood_reject)
-
-        if bal_acc > best_bal_acc:
-            best_tau = tau
-            best_bal_acc = bal_acc
-            best_id_accept = id_accept
-            best_ood_reject = ood_reject
-
-    return float(best_tau), {
-        "balanced_acc": float(best_bal_acc),
-        "id_accept_rate": float(best_id_accept),
-        "ood_reject_rate": float(best_ood_reject),
-    }
-
-
-def calibrate_future_ood_thresholds(
-    model,
-    expert_logits_by_task_calib,
-    y_calib,
-    score_type="energy",
-):
-    """
-    For expert t, fit ID as task t train samples and OOD as later-task train samples.
-    The last expert has no future OOD and is set to always accept.
-    """
-    tau_by_task = []
-    stats_by_task = []
-    task_ranges = list(model.task_class_ranges)
-    num_tasks = len(task_ranges)
-
-    for task_id, (start, end) in enumerate(task_ranges):
-        logits_t = expert_logits_by_task_calib[task_id]
-        scores_t = expert_ood_score_np(logits_t, score_type=score_type)
-
-        id_mask = (y_calib >= start) & (y_calib < end)
-        ood_mask = y_calib >= end
-
-        id_scores = scores_t[id_mask]
-        ood_scores = scores_t[ood_mask]
-
-        if task_id == num_tasks - 1 or len(ood_scores) == 0:
-            tau = -np.inf
-            stats = {
-                "task_id": task_id,
-                "tau": tau,
-                "num_id": int(len(id_scores)),
-                "num_ood_future": int(len(ood_scores)),
-                "balanced_acc": None,
-                "id_accept_rate": None,
-                "ood_reject_rate": None,
-                "note": "last task or no future OOD; always accept",
-            }
-        else:
-            tau, fit_stats = fit_threshold_balanced_acc(id_scores, ood_scores)
-            stats = {
-                "task_id": task_id,
-                "tau": tau,
-                "num_id": int(len(id_scores)),
-                "num_ood_future": int(len(ood_scores)),
-                **fit_stats,
-            }
-
-        tau_by_task.append(tau)
-        stats_by_task.append(stats)
-
-    return np.array(tau_by_task, dtype=np.float32), stats_by_task
-
-
-def ood_hard_accept_fusion_probs_np(
-    model,
-    shared_logits,
-    expert_logits_by_task,
-    tau_by_task,
-    score_type="energy",
-    use_shared_mass=True,
-):
-    """
-    Hard OOD-gated expert fusion. If every expert rejects a sample, fall back to
-    the shared posterior for that sample.
-    """
-    p_shared = stable_softmax_np(shared_logits).astype(np.float32)
-    p_final = np.zeros_like(p_shared, dtype=np.float32)
-
-    for task_id, (start, end) in enumerate(model.task_class_ranges):
-        expert_logits = expert_logits_by_task[task_id]
-        expert_local = stable_softmax_np(expert_logits).astype(np.float32)
-
-        scores = expert_ood_score_np(expert_logits, score_type=score_type)
-        accept = (scores > tau_by_task[task_id]).astype(np.float32)[:, None]
-
-        if use_shared_mass:
-            task_mass = p_shared[:, start:end].sum(axis=1, keepdims=True)
-            p_final[:, start:end] = task_mass * accept * expert_local
-        else:
-            p_final[:, start:end] = accept * expert_local
-
-    row_sum = p_final.sum(axis=1, keepdims=True)
-    zero_mask = row_sum[:, 0] <= 1e-12
-    p_final = p_final / np.clip(row_sum, 1e-12, None)
-
-    if np.any(zero_mask):
-        p_final[zero_mask] = p_shared[zero_mask]
-
-    return p_final
-
-
-def ood_soft_accept_fusion_probs_np(
-    model,
-    shared_logits,
-    expert_logits_by_task,
-    tau_by_task,
-    score_type="max_logit",
-    temp=0.05,
-    floor=0.2,
-    use_shared_mass=True,
-):
-    p_shared = stable_softmax_np(shared_logits).astype(np.float32)
-    p_final = np.zeros_like(p_shared, dtype=np.float32)
-
-    for task_id, (start, end) in enumerate(model.task_class_ranges):
-        expert_logits = expert_logits_by_task[task_id]
-        expert_local = stable_softmax_np(expert_logits).astype(np.float32)
-
-        scores = expert_ood_score_np(expert_logits, score_type=score_type)
-
-        if np.isneginf(tau_by_task[task_id]):
-            accept = np.ones_like(scores, dtype=np.float32)[:, None]
-        else:
-            raw = sigmoid_np((scores - tau_by_task[task_id]) / temp)
-            accept = floor + (1.0 - floor) * raw
-            accept = accept.astype(np.float32)[:, None]
-
-        if use_shared_mass:
-            task_mass = p_shared[:, start:end].sum(axis=1, keepdims=True)
-            p_final[:, start:end] = task_mass * accept * expert_local
-        else:
-            p_final[:, start:end] = accept * expert_local
-
-    row_sum = p_final.sum(axis=1, keepdims=True)
-    p_final = p_final / np.clip(row_sum, 1e-12, None)
-    return p_final
-
+# -------------------------
+# Model construction
+# -------------------------
 
 def build_model_structure_without_training(model, data_manager, num_tasks):
     """
@@ -349,6 +95,7 @@ def build_model_structure_without_training(model, data_manager, num_tasks):
         return None
 
     model._train = noop_train
+
     try:
         for _ in range(num_tasks):
             model.incremental_train(data_manager)
@@ -373,28 +120,413 @@ def set_eval_known_classes(model, ckpt):
     """
     ckpt_known_classes = int(ckpt["known_classes"])
     total_classes = int(ckpt["total_classes"])
+
     if ckpt_known_classes >= total_classes and model.task_class_ranges:
         model._known_classes = int(model.task_class_ranges[-1][0])
     else:
         model._known_classes = ckpt_known_classes
 
 
-def print_metric(name, accy):
-    print(f"\n[{name}]")
-    print(f"top1: {accy['top1']:.2f}")
-    print(f"top5: {accy['top5']:.2f}")
-    print("grouped:", accy["grouped"])
+# -------------------------
+# Fusion baselines
+# -------------------------
+
+def product_marginal_fusion_probs_np(model, shared_logits, expert_logits_by_task):
+    """
+    Marginal-preserving product fusion:
+
+        p(c | x)
+        =
+        p_s(task(c) | x)
+        *
+        normalize_task(
+            p_s(c | x, task(c)) * p_e(c | x, task(c))
+        )
+
+    This preserves shared task marginal and only refines within-task distribution.
+    """
+    p_shared = stable_softmax_np(shared_logits).astype(np.float32)
+    p_final = np.zeros_like(p_shared, dtype=np.float32)
+
+    for task_id, (start, end) in enumerate(get_task_ranges(model)):
+        block = p_shared[:, start:end]
+        task_mass = block.sum(axis=1, keepdims=True)
+
+        shared_local = block / np.clip(task_mass, 1e-12, None)
+        expert_local = stable_softmax_np(expert_logits_by_task[task_id]).astype(np.float32)
+
+        local = shared_local * expert_local
+        local = local / np.clip(local.sum(axis=1, keepdims=True), 1e-12, None)
+
+        p_final[:, start:end] = task_mass * local
+
+    return p_final
 
 
-def parse_device(device_arg: str):
-    if device_arg.lower() == "cpu" or not torch.cuda.is_available():
-        return torch.device("cpu")
-    return torch.device(f"cuda:{device_arg}")
+# -------------------------
+# Oracle local diagnosis
+# -------------------------
 
+def oracle_task_local_acc(model, shared_logits_np, expert_logits_by_task, y_true):
+    shared_correct = 0
+    expert_correct = 0
+    total = len(y_true)
+
+    for i, y in enumerate(y_true):
+        true_task = None
+        local_y = None
+
+        for task_id, (start, end) in enumerate(get_task_ranges(model)):
+            if start <= y < end:
+                true_task = task_id
+                local_y = y - start
+                break
+
+        if true_task is None:
+            raise ValueError(f"Target {int(y)} does not belong to any task class range.")
+
+        start, end = get_task_ranges(model)[true_task]
+
+        shared_local_pred = np.argmax(shared_logits_np[i, start:end])
+        expert_local_pred = np.argmax(expert_logits_by_task[true_task][i])
+
+        shared_correct += int(shared_local_pred == local_y)
+        expert_correct += int(expert_local_pred == local_y)
+
+    return {
+        "shared_oracle_task_local_top1": 100.0 * shared_correct / total,
+        "expert_oracle_task_local_top1": 100.0 * expert_correct / total,
+    }
+
+
+# -------------------------
+# Expert OOD / reject score
+# -------------------------
+
+def expert_ood_score_np(logits, score_type="max_logit"):
+    """
+    Larger score means the sample is more likely to be in-distribution for this expert.
+
+    Kept scores:
+      max_logit : max logit
+      margin    : top1 logit - top2 logit
+      msp       : max softmax probability
+    """
+    if score_type == "max_logit":
+        return np.max(logits, axis=1)
+
+    if score_type == "margin":
+        if logits.shape[1] < 2:
+            return np.zeros((logits.shape[0],), dtype=logits.dtype)
+        part = np.partition(logits, kth=-2, axis=1)
+        return part[:, -1] - part[:, -2]
+
+    if score_type == "msp":
+        prob = stable_softmax_np(logits)
+        return np.max(prob, axis=1)
+
+    raise ValueError(f"Unknown score_type: {score_type}")
+
+
+def fit_safe_reject_thresholds(
+    model,
+    expert_logits_by_task_calib,
+    y_calib,
+    score_type="max_logit",
+    max_id_false_reject=0.01,
+):
+    """
+    Safe reject threshold.
+
+    Score larger means more ID-like.
+    Reject rule:
+        reject if score <= tau
+
+    We choose tau as the low percentile of ID scores, so that calibration ID
+    false reject rate is approximately max_id_false_reject.
+
+    For expert t:
+      ID  = task t training samples
+      future OOD = task t+1 ... final task training samples
+
+    The threshold is chosen only from ID quantile. Future OOD is used only
+    for diagnostic reporting.
+    """
+    tau_by_task = []
+    stats_by_task = []
+
+    task_ranges = get_task_ranges(model)
+    num_tasks = len(task_ranges)
+
+    percentile = 100.0 * max_id_false_reject
+
+    for task_id, (start, end) in enumerate(task_ranges):
+        logits_t = expert_logits_by_task_calib[task_id]
+        scores_t = expert_ood_score_np(logits_t, score_type=score_type)
+
+        id_mask = (y_calib >= start) & (y_calib < end)
+        future_ood_mask = y_calib >= end
+
+        id_scores = scores_t[id_mask]
+        future_ood_scores = scores_t[future_ood_mask]
+
+        if len(id_scores) == 0 or task_id == num_tasks - 1:
+            tau = -np.inf
+        else:
+            tau = float(np.percentile(id_scores, percentile))
+
+        if np.isneginf(tau):
+            id_false_reject = None
+            future_ood_reject = None
+        else:
+            id_false_reject = float((id_scores <= tau).mean())
+            future_ood_reject = (
+                None
+                if len(future_ood_scores) == 0
+                else float((future_ood_scores <= tau).mean())
+            )
+
+        stats_by_task.append(
+            {
+                "task_id": int(task_id),
+                "tau": tau,
+                "num_id": int(len(id_scores)),
+                "num_future_ood": int(len(future_ood_scores)),
+                "id_false_reject": id_false_reject,
+                "future_ood_reject": future_ood_reject,
+            }
+        )
+        tau_by_task.append(tau)
+
+    return np.array(tau_by_task, dtype=np.float32), stats_by_task
+
+
+# -------------------------
+# Semi-guaranteed veto analysis
+# -------------------------
+
+def class_to_task_ids(model, y):
+    y = np.asarray(y)
+    task_ids = np.full_like(y, fill_value=-1, dtype=np.int64)
+
+    for task_id, (start, end) in enumerate(get_task_ranges(model)):
+        mask = (y >= start) & (y < end)
+        task_ids[mask] = task_id
+
+    if np.any(task_ids < 0):
+        bad = y[task_ids < 0][:10]
+        raise ValueError(f"Some labels/classes are outside task ranges: {bad}")
+
+    return task_ids
+
+
+def analyze_top1_reject_precision(
+    model,
+    base_probs,
+    expert_logits_by_task,
+    y_true,
+    tau_by_task,
+    score_type="max_logit",
+    name="product",
+):
+    """
+    Analyze whether the top1 task/class from base_probs can be safely vetoed.
+
+    Important metrics:
+      false_reject_on_correct_top1_class:
+          base top1 class was correct, but veto rejects it.
+
+      false_reject_on_correct_top1_task:
+          base top1 task was correct, but veto rejects that task.
+
+      reject_precision_task_wrong:
+          among rejected top1 samples, how many top1 tasks were actually wrong.
+
+      reject_recall_on_task_wrong_top1:
+          among task-wrong top1 samples, how many are caught by reject.
+    """
+    n = len(y_true)
+
+    top1 = np.argmax(base_probs, axis=1)
+    true_class = y_true
+
+    true_task = class_to_task_ids(model, true_class)
+    top1_task = class_to_task_ids(model, top1)
+
+    top1_class_correct = top1 == true_class
+    top1_task_correct = top1_task == true_task
+    top1_task_wrong = ~top1_task_correct
+
+    reject_top1 = np.zeros(n, dtype=bool)
+    top1_score = np.zeros(n, dtype=np.float32)
+
+    for task_id, (start, end) in enumerate(get_task_ranges(model)):
+        idx = np.where(top1_task == task_id)[0]
+        if len(idx) == 0:
+            continue
+
+        logits_t = expert_logits_by_task[task_id][idx]
+        scores_t = expert_ood_score_np(logits_t, score_type=score_type)
+
+        top1_score[idx] = scores_t
+
+        tau = tau_by_task[task_id]
+        if np.isneginf(tau):
+            reject_top1[idx] = False
+        else:
+            reject_top1[idx] = scores_t <= tau
+
+    num_reject = int(reject_top1.sum())
+
+    def rate(event, base):
+        denom = int(base.sum())
+        if denom == 0:
+            return None
+        return float((event & base).sum() / denom)
+
+    stats = {
+        "base_name": name,
+        "score_type": score_type,
+        "num_samples": int(n),
+
+        "base_top1_acc": float(top1_class_correct.mean()),
+        "base_top1_task_acc": float(top1_task_correct.mean()),
+
+        "top1_reject_rate": float(reject_top1.mean()),
+        "num_top1_rejected": num_reject,
+
+        "false_reject_on_correct_top1_class": rate(reject_top1, top1_class_correct),
+        "false_reject_on_correct_top1_task": rate(reject_top1, top1_task_correct),
+
+        "reject_precision_class_wrong": (
+            None
+            if num_reject == 0
+            else float((reject_top1 & ~top1_class_correct).sum() / num_reject)
+        ),
+        "reject_precision_task_wrong": (
+            None
+            if num_reject == 0
+            else float((reject_top1 & top1_task_wrong).sum() / num_reject)
+        ),
+
+        "reject_recall_on_task_wrong_top1": rate(reject_top1, top1_task_wrong),
+
+        "num_false_reject_correct_class": int((reject_top1 & top1_class_correct).sum()),
+        "num_false_reject_correct_task": int((reject_top1 & top1_task_correct).sum()),
+        "num_reject_task_wrong": int((reject_top1 & top1_task_wrong).sum()),
+    }
+
+    print(f"\n[top1_reject_precision | base={name} | score={score_type}]")
+    for k, v in stats.items():
+        if isinstance(v, float):
+            print(f"{k}: {v:.4f}")
+        else:
+            print(f"{k}: {v}")
+
+    return stats
+
+
+def semi_veto_predict_from_base_probs(
+    model,
+    base_probs,
+    expert_logits_by_task,
+    tau_by_task,
+    score_type="max_logit",
+    topk=5,
+):
+    """
+    Conservative semi-veto inference.
+
+    1. Use base_probs to rank all classes.
+    2. Visit candidates in descending score order.
+    3. If the candidate's task expert rejects this sample, skip the whole task.
+    4. Otherwise keep the class.
+    5. If not enough candidates remain, fill from the original base ranking.
+
+    This does NOT add/subtract scores. It only vetoes a task when its expert
+    safely rejects the sample.
+    """
+    n, _ = base_probs.shape
+    task_ranges = get_task_ranges(model)
+
+    preds = np.zeros((n, topk), dtype=np.int64)
+
+    # Precompute per-sample per-task reject decision.
+    reject_task = np.zeros((n, len(task_ranges)), dtype=bool)
+
+    for task_id, (start, end) in enumerate(task_ranges):
+        logits_t = expert_logits_by_task[task_id]
+        scores_t = expert_ood_score_np(logits_t, score_type=score_type)
+        tau = tau_by_task[task_id]
+
+        if np.isneginf(tau):
+            reject_task[:, task_id] = False
+        else:
+            reject_task[:, task_id] = scores_t <= tau
+
+    rejected_any = np.zeros(n, dtype=bool)
+    fallback = np.zeros(n, dtype=bool)
+    num_skipped_tasks = np.zeros(n, dtype=np.int64)
+
+    for i in range(n):
+        ranked = np.argsort(-base_probs[i])
+
+        skipped_tasks = set()
+        candidates = []
+
+        for c in ranked:
+            c = int(c)
+
+            task_id = None
+            for t, (start, end) in enumerate(task_ranges):
+                if start <= c < end:
+                    task_id = t
+                    break
+
+            if task_id is None:
+                continue
+
+            if task_id in skipped_tasks:
+                continue
+
+            if reject_task[i, task_id]:
+                skipped_tasks.add(task_id)
+                rejected_any[i] = True
+                continue
+
+            candidates.append(c)
+
+            if len(candidates) >= topk:
+                break
+
+        if len(candidates) < topk:
+            fallback[i] = True
+            for c in ranked:
+                c = int(c)
+                if c not in candidates:
+                    candidates.append(c)
+                if len(candidates) >= topk:
+                    break
+
+        num_skipped_tasks[i] = len(skipped_tasks)
+        preds[i] = np.array(candidates[:topk], dtype=np.int64)
+
+    diag = {
+        "rejected_any_rate": float(rejected_any.mean()),
+        "fallback_rate": float(fallback.mean()),
+        "avg_skipped_tasks": float(num_skipped_tasks.mean()),
+    }
+
+    return preds, diag
+
+
+# -------------------------
+# Main
+# -------------------------
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run SPiE checkpoint ablations: shared FC, original posterior fusion, and clean marginal fusion."
+        description="SPiE semi-veto ablation: product fusion + conservative expert rejection."
     )
     parser.add_argument("--config", type=str, required=True, help="Path to the SPiE experiment json.")
     parser.add_argument("--checkpoint", type=str, required=True, help="Path to a saved task_*.pkl checkpoint.")
@@ -402,29 +534,25 @@ def main():
     parser.add_argument("--seed", type=int, default=None, help="Override config seed.")
     parser.add_argument("--batch-size", type=int, default=None, help="Calibration loader batch size.")
     parser.add_argument("--num-workers", type=int, default=None, help="Calibration loader worker count.")
+
     parser.add_argument(
-        "--ood-scores",
-        type=str,
-        default="energy,max_logit,margin,msp,neg_entropy",
-        help="Comma-separated OOD score types.",
-    )
-    parser.add_argument(
-        "--soft-ood-scores",
+        "--reject-scores",
         type=str,
         default="max_logit,msp,margin",
-        help="Comma-separated OOD score types for soft accept grid search.",
+        help="Comma-separated reject score types. Recommended: max_logit,msp,margin.",
     )
     parser.add_argument(
-        "--soft-ood-temps",
+        "--id-false-reject-rates",
         type=str,
-        default="0.02,0.05,0.1,0.2",
-        help="Comma-separated temperatures for soft accept grid search.",
+        default="0.001,0.005,0.01,0.02",
+        help="Comma-separated safe ID false reject rates for threshold selection.",
     )
     parser.add_argument(
-        "--soft-ood-floors",
+        "--base-for-veto",
         type=str,
-        default="0.1,0.2,0.4,0.6",
-        help="Comma-separated floors for soft accept grid search.",
+        default="product",
+        choices=["product", "shared", "original_p_final"],
+        help="Which base ranking to apply semi-veto to.",
     )
     parser.add_argument(
         "--output-json",
@@ -434,6 +562,7 @@ def main():
         default=None,
         help="Optional path to save summary json.",
     )
+
     args_cli = parser.parse_args()
 
     with open(args_cli.config, "r") as f:
@@ -509,11 +638,20 @@ def main():
     model._network.to(device)
     model._network.eval()
 
+    # -------------------------
+    # Collect test logits
+    # -------------------------
+
     print("\nCollecting test logits...")
     shared_logits_np, expert_logits_by_task, y_true = model._collect_eval_logits_np(
         model.test_loader
     )
 
+    # -------------------------
+    # Baselines
+    # -------------------------
+
+    shared_probs = stable_softmax_np(shared_logits_np).astype(np.float32)
     shared_pred = model._predict_topk_np(shared_logits_np)
     shared_accy = model._evaluate(shared_pred, y_true)
 
@@ -521,19 +659,12 @@ def main():
         shared_logits_np,
         expert_logits_by_task,
     )
+
     p_moe_pred = model._predict_topk_np(p_moe)
     p_final_pred = model._predict_topk_np(p_final)
 
     p_moe_accy = model._evaluate(p_moe_pred, y_true)
     p_final_accy = model._evaluate(p_final_pred, y_true)
-
-    p_clean = clean_marginal_fusion_probs_np(
-        model,
-        shared_logits_np,
-        expert_logits_by_task,
-    )
-    p_clean_pred = model._predict_topk_np(p_clean)
-    p_clean_accy = model._evaluate(p_clean_pred, y_true)
 
     p_product = product_marginal_fusion_probs_np(
         model,
@@ -553,45 +684,52 @@ def main():
     print_metric("shared_fc", shared_accy)
     print_metric("original_p_moe", p_moe_accy)
     print_metric("original_p_final", p_final_accy)
-    print_metric("clean_marginal_fusion", p_clean_accy)
     print_metric("product_marginal_fusion", p_product_accy)
 
     print("\n[oracle_task_local]")
     for key, value in oracle_local_accy.items():
         print(f"{key}: {value:.2f}")
 
-    all_results = {
-        "shared_fc": shared_accy["top1"],
-        "original_p_moe": p_moe_accy["top1"],
-        "original_p_final": p_final_accy["top1"],
-        "clean_marginal_fusion": p_clean_accy["top1"],
-        "product_marginal_fusion": p_product_accy["top1"],
-    }
-    metric_results = {
-        "shared_fc": shared_accy,
-        "original_p_moe": p_moe_accy,
-        "original_p_final": p_final_accy,
-        "clean_marginal_fusion": p_clean_accy,
-        "product_marginal_fusion": p_product_accy,
-    }
-
-    row_sum = p_clean.sum(axis=1)
-    print(
-        "\nClean fusion probability sum:",
-        f"min={row_sum.min():.6f}",
-        f"max={row_sum.max():.6f}",
-        f"mean={row_sum.mean():.6f}",
-    )
-
     product_row_sum = p_product.sum(axis=1)
     print(
-        "Product fusion probability sum:",
+        "\nProduct fusion probability sum:",
         f"min={product_row_sum.min():.6f}",
         f"max={product_row_sum.max():.6f}",
         f"mean={product_row_sum.mean():.6f}",
     )
 
+    all_results = {
+        "shared_fc": shared_accy["top1"],
+        "original_p_moe": p_moe_accy["top1"],
+        "original_p_final": p_final_accy["top1"],
+        "product_marginal_fusion": p_product_accy["top1"],
+    }
+
+    metric_results = {
+        "shared_fc": shared_accy,
+        "original_p_moe": p_moe_accy,
+        "original_p_final": p_final_accy,
+        "product_marginal_fusion": p_product_accy,
+    }
+
+    if args_cli.base_for_veto == "product":
+        base_probs = p_product
+        base_name = "product"
+    elif args_cli.base_for_veto == "shared":
+        base_probs = shared_probs
+        base_name = "shared"
+    elif args_cli.base_for_veto == "original_p_final":
+        base_probs = p_final
+        base_name = "original_p_final"
+    else:
+        raise ValueError(args_cli.base_for_veto)
+
+    # -------------------------
+    # Collect calibration logits
+    # -------------------------
+
     print("\nCollecting calibration logits on seen training data...")
+
     batch_size = (
         args_cli.batch_size
         if args_cli.batch_size is not None
@@ -602,6 +740,7 @@ def main():
         if args_cli.num_workers is not None
         else int(args.get("num_workers", 8))
     )
+
     calib_dataset = data_manager.get_dataset(
         np.arange(0, model._total_classes),
         source="train",
@@ -614,124 +753,89 @@ def main():
         num_workers=num_workers,
         pin_memory=device.type == "cuda",
     )
+
     _, expert_logits_by_task_calib, y_calib = model._collect_eval_logits_np(calib_loader)
 
-    ood_score_types = parse_csv_strings(args_cli.ood_scores)
-    soft_ood_score_types = set(parse_csv_strings(args_cli.soft_ood_scores))
-    calibration_score_types = list(dict.fromkeys([*ood_score_types, *soft_ood_score_types]))
-    soft_ood_temps = parse_csv_floats(args_cli.soft_ood_temps)
-    soft_ood_floors = parse_csv_floats(args_cli.soft_ood_floors)
-    ood_calibration = {}
-    ood_probability_sum = {}
-    soft_ood_grid = {}
+    # -------------------------
+    # Semi-veto experiments
+    # -------------------------
 
-    for score_type in calibration_score_types:
-        tau_by_task, ood_stats = calibrate_future_ood_thresholds(
-            model,
-            expert_logits_by_task_calib,
-            y_calib,
-            score_type=score_type,
-        )
+    reject_score_types = parse_csv_strings(args_cli.reject_scores)
+    id_false_reject_rates = parse_csv_floats(args_cli.id_false_reject_rates)
 
-        print(f"\n[OOD calibration: {score_type}]")
-        for stats in ood_stats:
-            bal_acc = stats["balanced_acc"]
-            id_accept = stats["id_accept_rate"]
-            ood_reject = stats["ood_reject_rate"]
-            print(
-                f"task {stats['task_id']:02d} | "
-                f"tau={stats['tau']} | "
-                f"ID={stats['num_id']} | "
-                f"future_OOD={stats['num_ood_future']} | "
-                f"bal_acc={None if bal_acc is None else round(bal_acc, 4)} | "
-                f"id_accept={None if id_accept is None else round(id_accept, 4)} | "
-                f"ood_reject={None if ood_reject is None else round(ood_reject, 4)}"
-            )
+    semi_veto_diagnostics = {}
+    safe_thresholds = {}
 
-        ood_calibration[score_type] = {
-            "tau_by_task": tau_by_task,
-            "stats": ood_stats,
-        }
-
-        if score_type in ood_score_types:
-            p_ood_shared_mass = ood_hard_accept_fusion_probs_np(
+    for score_type in reject_score_types:
+        for idfr in id_false_reject_rates:
+            tau_by_task, threshold_stats = fit_safe_reject_thresholds(
                 model,
-                shared_logits_np,
-                expert_logits_by_task,
-                tau_by_task,
+                expert_logits_by_task_calib,
+                y_calib,
                 score_type=score_type,
-                use_shared_mass=True,
+                max_id_false_reject=idfr,
             )
-            pred_ood_shared_mass = model._predict_topk_np(p_ood_shared_mass)
-            acc_ood_shared_mass = model._evaluate(pred_ood_shared_mass, y_true)
-            name_shared_mass = f"ood_{score_type}_shared_mass_accept_expert"
-            print_metric(name_shared_mass, acc_ood_shared_mass)
-            all_results[name_shared_mass] = acc_ood_shared_mass["top1"]
-            metric_results[name_shared_mass] = acc_ood_shared_mass
 
-            p_ood_expert_only = ood_hard_accept_fusion_probs_np(
-                model,
-                shared_logits_np,
-                expert_logits_by_task,
-                tau_by_task,
-                score_type=score_type,
-                use_shared_mass=False,
-            )
-            pred_ood_expert_only = model._predict_topk_np(p_ood_expert_only)
-            acc_ood_expert_only = model._evaluate(pred_ood_expert_only, y_true)
-            name_expert_only = f"ood_{score_type}_accept_expert_only"
-            print_metric(name_expert_only, acc_ood_expert_only)
-            all_results[name_expert_only] = acc_ood_expert_only["top1"]
-            metric_results[name_expert_only] = acc_ood_expert_only
-
-            ood_row_sum = p_ood_shared_mass.sum(axis=1)
-            ood_probability_sum[score_type] = {
-                "shared_mass": {
-                    "min": float(ood_row_sum.min()),
-                    "max": float(ood_row_sum.max()),
-                    "mean": float(ood_row_sum.mean()),
-                }
+            key = f"{score_type}_idfr{idfr:g}"
+            safe_thresholds[key] = {
+                "score_type": score_type,
+                "id_false_reject_rate": idfr,
+                "tau_by_task": tau_by_task,
+                "stats": threshold_stats,
             }
+
             print(
-                f"OOD fusion probability sum ({score_type}, shared_mass):",
-                f"min={ood_row_sum.min():.6f}",
-                f"max={ood_row_sum.max():.6f}",
-                f"mean={ood_row_sum.mean():.6f}",
+                f"\n[SAFE reject thresholds | score={score_type} | "
+                f"target_id_false_reject={idfr:g}]"
+            )
+            for st in threshold_stats:
+                print(
+                    f"task {st['task_id']:02d} | "
+                    f"tau={st['tau']} | "
+                    f"ID={st['num_id']} | "
+                    f"future_OOD={st['num_future_ood']} | "
+                    f"id_false_reject={st['id_false_reject']} | "
+                    f"future_ood_reject={st['future_ood_reject']}"
+                )
+
+            reject_stats = analyze_top1_reject_precision(
+                model,
+                base_probs,
+                expert_logits_by_task,
+                y_true,
+                tau_by_task,
+                score_type=score_type,
+                name=base_name,
             )
 
-        if score_type in soft_ood_score_types:
-            print(f"\n[OOD soft accept grid: {score_type}]")
-            soft_ood_grid[score_type] = []
+            veto_pred, veto_diag = semi_veto_predict_from_base_probs(
+                model,
+                base_probs,
+                expert_logits_by_task,
+                tau_by_task,
+                score_type=score_type,
+                topk=5,
+            )
 
-            for temp in soft_ood_temps:
-                for floor in soft_ood_floors:
-                    p_soft = ood_soft_accept_fusion_probs_np(
-                        model,
-                        shared_logits_np,
-                        expert_logits_by_task,
-                        tau_by_task,
-                        score_type=score_type,
-                        temp=temp,
-                        floor=floor,
-                        use_shared_mass=True,
-                    )
-                    pred_soft = model._predict_topk_np(p_soft)
-                    acc_soft = model._evaluate(pred_soft, y_true)
-                    name_soft = f"ood_soft_{score_type}_temp{temp:g}_floor{floor:g}_shared_mass"
+            veto_accy = model._evaluate(veto_pred, y_true)
+            veto_name = f"semi_veto_{base_name}_{score_type}_idfr{idfr:g}"
 
-                    print(f"{score_type} temp={temp:g} floor={floor:g} top1={acc_soft['top1']:.2f}")
-                    all_results[name_soft] = acc_soft["top1"]
-                    metric_results[name_soft] = acc_soft
-                    soft_ood_grid[score_type].append(
-                        {
-                            "name": name_soft,
-                            "score_type": score_type,
-                            "temp": temp,
-                            "floor": floor,
-                            "top1": acc_soft["top1"],
-                            "top5": acc_soft["top5"],
-                        }
-                    )
+            print_metric(veto_name, veto_accy)
+            print(f"[{veto_name} diag]")
+            for k, v in veto_diag.items():
+                print(f"{k}: {v:.4f}")
+
+            all_results[veto_name] = veto_accy["top1"]
+            metric_results[veto_name] = veto_accy
+
+            semi_veto_diagnostics[veto_name] = {
+                "reject_stats": reject_stats,
+                "veto_diag": veto_diag,
+            }
+
+    # -------------------------
+    # Summary
+    # -------------------------
 
     best_name = max(all_results, key=all_results.get)
 
@@ -747,28 +851,29 @@ def main():
             "task": target_task,
             "total_classes": int(ckpt["total_classes"]),
             "eval_known_classes": int(model._known_classes),
+            "base_for_veto": base_name,
             "top1": all_results,
             "metrics": metric_results,
             "oracle_task_local": oracle_local_accy,
-            "best_top1": {"name": best_name, "value": all_results[best_name]},
-            "clean_probability_sum": {
-                "min": float(row_sum.min()),
-                "max": float(row_sum.max()),
-                "mean": float(row_sum.mean()),
+            "best_top1": {
+                "name": best_name,
+                "value": all_results[best_name],
             },
             "product_probability_sum": {
                 "min": float(product_row_sum.min()),
                 "max": float(product_row_sum.max()),
                 "mean": float(product_row_sum.mean()),
             },
-            "ood_calibration": ood_calibration,
-            "ood_probability_sum": ood_probability_sum,
-            "soft_ood_grid": soft_ood_grid,
+            "safe_thresholds": safe_thresholds,
+            "semi_veto_diagnostics": semi_veto_diagnostics,
         }
+
         output_path = Path(args_cli.output_json)
         output_path.parent.mkdir(parents=True, exist_ok=True)
+
         with output_path.open("w") as f:
             json.dump(to_jsonable(output), f, indent=2)
+
         print(f"\nSaved summary json: {output_path}")
 
 
