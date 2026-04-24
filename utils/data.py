@@ -166,6 +166,26 @@ def build_vpt_nsp2pp_transform(is_train):
     ]
 
 
+DOMAINNET_OFFICIAL_TRAIN_TXT = "./utils/datautils/domainnet/train.txt"
+DOMAINNET_OFFICIAL_TEST_TXT = "./utils/datautils/domainnet/test.txt"
+
+
+def resolve_domainnet_txts(args):
+    protocol = str(args.get("domainnet_protocol", "official")).lower()
+    if protocol != "official" and (
+        "domainnet_train_txt" not in args or "domainnet_test_txt" not in args
+    ):
+        raise ValueError(
+            "DomainNet protocol '{}' requires domainnet_train_txt and "
+            "domainnet_test_txt.".format(protocol)
+        )
+
+    return (
+        args.get("domainnet_train_txt", DOMAINNET_OFFICIAL_TRAIN_TXT),
+        args.get("domainnet_test_txt", DOMAINNET_OFFICIAL_TEST_TXT),
+    )
+
+
 class iCIFAR224(iData):
     def __init__(self, args):
         super().__init__()
@@ -321,12 +341,7 @@ class iDomainNet(iData):
 
     def download_data(self):
         rootdir = self.args.get("domainnet_root", "./data/domainnet")
-        train_txt = self.args.get(
-            "domainnet_train_txt", "./utils/datautils/domainnet/train.txt"
-        )
-        test_txt = self.args.get(
-            "domainnet_test_txt", "./utils/datautils/domainnet/test.txt"
-        )
+        train_txt, test_txt = resolve_domainnet_txts(self.args)
 
         train_images, train_labels = _load_path_label_list(rootdir, train_txt)
         test_images, test_labels = _load_path_label_list(rootdir, test_txt)
