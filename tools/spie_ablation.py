@@ -37,6 +37,18 @@ def logsumexp_np(x: np.ndarray, axis=1, keepdims=False):
     return out
 
 
+def sigmoid_np(x):
+    return 1.0 / (1.0 + np.exp(-x))
+
+
+def parse_csv_floats(value):
+    return [float(item.strip()) for item in value.split(",") if item.strip()]
+
+
+def parse_csv_strings(value):
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
 def to_jsonable(obj):
     if isinstance(obj, dict):
         return {key: to_jsonable(value) for key, value in obj.items()}
@@ -289,6 +301,43 @@ def ood_hard_accept_fusion_probs_np(
     return p_final
 
 
+def ood_soft_accept_fusion_probs_np(
+    model,
+    shared_logits,
+    expert_logits_by_task,
+    tau_by_task,
+    score_type="max_logit",
+    temp=0.05,
+    floor=0.2,
+    use_shared_mass=True,
+):
+    p_shared = stable_softmax_np(shared_logits).astype(np.float32)
+    p_final = np.zeros_like(p_shared, dtype=np.float32)
+
+    for task_id, (start, end) in enumerate(model.task_class_ranges):
+        expert_logits = expert_logits_by_task[task_id]
+        expert_local = stable_softmax_np(expert_logits).astype(np.float32)
+
+        scores = expert_ood_score_np(expert_logits, score_type=score_type)
+
+        if np.isneginf(tau_by_task[task_id]):
+            accept = np.ones_like(scores, dtype=np.float32)[:, None]
+        else:
+            raw = sigmoid_np((scores - tau_by_task[task_id]) / temp)
+            accept = floor + (1.0 - floor) * raw
+            accept = accept.astype(np.float32)[:, None]
+
+        if use_shared_mass:
+            task_mass = p_shared[:, start:end].sum(axis=1, keepdims=True)
+            p_final[:, start:end] = task_mass * accept * expert_local
+        else:
+            p_final[:, start:end] = accept * expert_local
+
+    row_sum = p_final.sum(axis=1, keepdims=True)
+    p_final = p_final / np.clip(row_sum, 1e-12, None)
+    return p_final
+
+
 def build_model_structure_without_training(model, data_manager, num_tasks):
     """
     Run incremental_train only to initialize task structure, heads, and loaders.
@@ -358,6 +407,24 @@ def main():
         type=str,
         default="energy,max_logit,margin,msp,neg_entropy",
         help="Comma-separated OOD score types.",
+    )
+    parser.add_argument(
+        "--soft-ood-scores",
+        type=str,
+        default="max_logit,msp,margin",
+        help="Comma-separated OOD score types for soft accept grid search.",
+    )
+    parser.add_argument(
+        "--soft-ood-temps",
+        type=str,
+        default="0.02,0.05,0.1,0.2",
+        help="Comma-separated temperatures for soft accept grid search.",
+    )
+    parser.add_argument(
+        "--soft-ood-floors",
+        type=str,
+        default="0.1,0.2,0.4,0.6",
+        help="Comma-separated floors for soft accept grid search.",
     )
     parser.add_argument(
         "--output-json",
@@ -549,15 +616,16 @@ def main():
     )
     _, expert_logits_by_task_calib, y_calib = model._collect_eval_logits_np(calib_loader)
 
-    ood_score_types = [
-        score_type.strip()
-        for score_type in args_cli.ood_scores.split(",")
-        if score_type.strip()
-    ]
+    ood_score_types = parse_csv_strings(args_cli.ood_scores)
+    soft_ood_score_types = set(parse_csv_strings(args_cli.soft_ood_scores))
+    calibration_score_types = list(dict.fromkeys([*ood_score_types, *soft_ood_score_types]))
+    soft_ood_temps = parse_csv_floats(args_cli.soft_ood_temps)
+    soft_ood_floors = parse_csv_floats(args_cli.soft_ood_floors)
     ood_calibration = {}
     ood_probability_sum = {}
+    soft_ood_grid = {}
 
-    for score_type in ood_score_types:
+    for score_type in calibration_score_types:
         tau_by_task, ood_stats = calibrate_future_ood_thresholds(
             model,
             expert_logits_by_task_calib,
@@ -585,50 +653,85 @@ def main():
             "stats": ood_stats,
         }
 
-        p_ood_shared_mass = ood_hard_accept_fusion_probs_np(
-            model,
-            shared_logits_np,
-            expert_logits_by_task,
-            tau_by_task,
-            score_type=score_type,
-            use_shared_mass=True,
-        )
-        pred_ood_shared_mass = model._predict_topk_np(p_ood_shared_mass)
-        acc_ood_shared_mass = model._evaluate(pred_ood_shared_mass, y_true)
-        name_shared_mass = f"ood_{score_type}_shared_mass_accept_expert"
-        print_metric(name_shared_mass, acc_ood_shared_mass)
-        all_results[name_shared_mass] = acc_ood_shared_mass["top1"]
-        metric_results[name_shared_mass] = acc_ood_shared_mass
+        if score_type in ood_score_types:
+            p_ood_shared_mass = ood_hard_accept_fusion_probs_np(
+                model,
+                shared_logits_np,
+                expert_logits_by_task,
+                tau_by_task,
+                score_type=score_type,
+                use_shared_mass=True,
+            )
+            pred_ood_shared_mass = model._predict_topk_np(p_ood_shared_mass)
+            acc_ood_shared_mass = model._evaluate(pred_ood_shared_mass, y_true)
+            name_shared_mass = f"ood_{score_type}_shared_mass_accept_expert"
+            print_metric(name_shared_mass, acc_ood_shared_mass)
+            all_results[name_shared_mass] = acc_ood_shared_mass["top1"]
+            metric_results[name_shared_mass] = acc_ood_shared_mass
 
-        p_ood_expert_only = ood_hard_accept_fusion_probs_np(
-            model,
-            shared_logits_np,
-            expert_logits_by_task,
-            tau_by_task,
-            score_type=score_type,
-            use_shared_mass=False,
-        )
-        pred_ood_expert_only = model._predict_topk_np(p_ood_expert_only)
-        acc_ood_expert_only = model._evaluate(pred_ood_expert_only, y_true)
-        name_expert_only = f"ood_{score_type}_accept_expert_only"
-        print_metric(name_expert_only, acc_ood_expert_only)
-        all_results[name_expert_only] = acc_ood_expert_only["top1"]
-        metric_results[name_expert_only] = acc_ood_expert_only
+            p_ood_expert_only = ood_hard_accept_fusion_probs_np(
+                model,
+                shared_logits_np,
+                expert_logits_by_task,
+                tau_by_task,
+                score_type=score_type,
+                use_shared_mass=False,
+            )
+            pred_ood_expert_only = model._predict_topk_np(p_ood_expert_only)
+            acc_ood_expert_only = model._evaluate(pred_ood_expert_only, y_true)
+            name_expert_only = f"ood_{score_type}_accept_expert_only"
+            print_metric(name_expert_only, acc_ood_expert_only)
+            all_results[name_expert_only] = acc_ood_expert_only["top1"]
+            metric_results[name_expert_only] = acc_ood_expert_only
 
-        ood_row_sum = p_ood_shared_mass.sum(axis=1)
-        ood_probability_sum[score_type] = {
-            "shared_mass": {
-                "min": float(ood_row_sum.min()),
-                "max": float(ood_row_sum.max()),
-                "mean": float(ood_row_sum.mean()),
+            ood_row_sum = p_ood_shared_mass.sum(axis=1)
+            ood_probability_sum[score_type] = {
+                "shared_mass": {
+                    "min": float(ood_row_sum.min()),
+                    "max": float(ood_row_sum.max()),
+                    "mean": float(ood_row_sum.mean()),
+                }
             }
-        }
-        print(
-            f"OOD fusion probability sum ({score_type}, shared_mass):",
-            f"min={ood_row_sum.min():.6f}",
-            f"max={ood_row_sum.max():.6f}",
-            f"mean={ood_row_sum.mean():.6f}",
-        )
+            print(
+                f"OOD fusion probability sum ({score_type}, shared_mass):",
+                f"min={ood_row_sum.min():.6f}",
+                f"max={ood_row_sum.max():.6f}",
+                f"mean={ood_row_sum.mean():.6f}",
+            )
+
+        if score_type in soft_ood_score_types:
+            print(f"\n[OOD soft accept grid: {score_type}]")
+            soft_ood_grid[score_type] = []
+
+            for temp in soft_ood_temps:
+                for floor in soft_ood_floors:
+                    p_soft = ood_soft_accept_fusion_probs_np(
+                        model,
+                        shared_logits_np,
+                        expert_logits_by_task,
+                        tau_by_task,
+                        score_type=score_type,
+                        temp=temp,
+                        floor=floor,
+                        use_shared_mass=True,
+                    )
+                    pred_soft = model._predict_topk_np(p_soft)
+                    acc_soft = model._evaluate(pred_soft, y_true)
+                    name_soft = f"ood_soft_{score_type}_temp{temp:g}_floor{floor:g}_shared_mass"
+
+                    print(f"{score_type} temp={temp:g} floor={floor:g} top1={acc_soft['top1']:.2f}")
+                    all_results[name_soft] = acc_soft["top1"]
+                    metric_results[name_soft] = acc_soft
+                    soft_ood_grid[score_type].append(
+                        {
+                            "name": name_soft,
+                            "score_type": score_type,
+                            "temp": temp,
+                            "floor": floor,
+                            "top1": acc_soft["top1"],
+                            "top5": acc_soft["top5"],
+                        }
+                    )
 
     best_name = max(all_results, key=all_results.get)
 
@@ -660,6 +763,7 @@ def main():
             },
             "ood_calibration": ood_calibration,
             "ood_probability_sum": ood_probability_sum,
+            "soft_ood_grid": soft_ood_grid,
         }
         output_path = Path(args_cli.output_json)
         output_path.parent.mkdir(parents=True, exist_ok=True)
