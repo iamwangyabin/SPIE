@@ -259,6 +259,7 @@ def get_backbone(args, pretrained=False):
             expert_tokens=args.get("expert_tokens", 4),
             shared_lora_rank=args.get("shared_lora_rank", 8),
             shared_lora_alpha=args.get("shared_lora_alpha", 1.0),
+            use_shared_adapter=args.get("use_shared_adapter", False),
             vera_rank=args.get("vera_rank", 256),
             vera_dropout=args.get("vera_dropout", 0.0),
             vera_d_initial=args.get("vera_d_initial", 0.1),

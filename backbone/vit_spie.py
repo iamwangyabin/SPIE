@@ -229,6 +229,7 @@ class VisionTransformer(TunaMaxVisionTransformer):
         expert_residual_scale=0.5,
         shared_lora_rank=8,
         shared_lora_alpha=1.0,
+        use_shared_adapter=False,
         vera_rank=256,
         vera_dropout=0.0,
         vera_d_initial=0.1,
@@ -237,6 +238,7 @@ class VisionTransformer(TunaMaxVisionTransformer):
     ):
         self.shared_lora_rank = int(shared_lora_rank)
         self.shared_lora_alpha = float(shared_lora_alpha)
+        self.use_shared_adapter = bool(use_shared_adapter)
         self.vera_rank = int(vera_rank)
         self.vera_dropout = float(vera_dropout)
         self.vera_d_initial = float(vera_d_initial)
@@ -290,6 +292,8 @@ class VisionTransformer(TunaMaxVisionTransformer):
 
     def init_shared_adapters(self):
         self.cur_shared_adapter = nn.ModuleList()
+        if not self.use_shared_adapter:
+            return
         for block in self.blocks:
             adapter = MLPLoRAAdapter(
                 dim=block.norm1.normalized_shape[0],
@@ -299,6 +303,11 @@ class VisionTransformer(TunaMaxVisionTransformer):
             ).to(self._device)
             self.cur_shared_adapter.append(adapter)
         self.cur_shared_adapter.requires_grad_(True)
+
+    def _shared_lora_for_layer(self, layer_idx):
+        if not self.use_shared_adapter:
+            return None
+        return self.cur_shared_adapter[layer_idx]
 
     def _init_expert_tokens_from_cls(self):
         return nn.Parameter(self.cls_token.detach().clone().expand(1, self.expert_tokens, -1).clone())
@@ -388,13 +397,12 @@ class VisionTransformer(TunaMaxVisionTransformer):
             dtype=x.dtype,
         )
         expert_adapter_stack = self._select_expert_adapter_stack(adapter_id, train)
-        shared_adapter_stack = self.cur_shared_adapter
 
         for layer_idx, blk in enumerate(self.blocks):
             expert_lora = None if expert_adapter_stack is None else expert_adapter_stack[layer_idx]
             x = blk(
                 x,
-                shared_lora=shared_adapter_stack[layer_idx],
+                shared_lora=self._shared_lora_for_layer(layer_idx),
                 expert_lora=expert_lora,
                 attn_mask=attn_mask,
                 num_backbone_tokens=num_backbone_tokens,
@@ -460,11 +468,13 @@ class VisionTransformer(TunaMaxVisionTransformer):
         residual = backbone_tokens
         norm2_x = blk.norm2(backbone_tokens)
         hidden = blk.fc1(norm2_x)
-        hidden = hidden + shared_lora.fc1_lora(norm2_x)
+        if shared_lora is not None:
+            hidden = hidden + shared_lora.fc1_lora(norm2_x)
         hidden = blk.mlp_drop(blk.act(hidden))
 
         out = blk.fc2(hidden)
-        out = out + shared_lora.fc2_lora(hidden)
+        if shared_lora is not None:
+            out = out + shared_lora.fc2_lora(hidden)
         out = blk.drop_path(blk.mlp_drop(out))
         return residual + out
 
@@ -606,7 +616,11 @@ class VisionTransformer(TunaMaxVisionTransformer):
             expert_attended = expert_tokens + blk.drop_path(
                 self._forward_expert_attention_parallel(blk, backbone_tokens, expert_tokens)
             )
-            backbone_tokens = self._forward_backbone_mlp(blk, backbone_attended, self.cur_shared_adapter[layer_idx])
+            backbone_tokens = self._forward_backbone_mlp(
+                blk,
+                backbone_attended,
+                self._shared_lora_for_layer(layer_idx),
+            )
             expert_tokens = self._forward_expert_mlp_parallel(
                 blk,
                 expert_attended,

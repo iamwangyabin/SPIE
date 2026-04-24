@@ -144,11 +144,15 @@ class Learner(BaseLearner):
         logging.info("%s %s total backbone parameters.", f"{total_params:,}", self._spie_version_name)
         logging.info("%s %s trainable backbone parameters.", f"{total_trainable_params:,}", self._spie_version_name)
         logging.info(
-            "SPiE shared branch: task0 epochs=%s lr=%s, incremental epochs=%s lr=%s, freeze_shared_lora_after_task0=%s.",
+            (
+                "SPiE shared branch: task0 epochs=%s lr=%s, incremental epochs=%s lr=%s, "
+                "use_shared_adapter=%s, freeze_shared_lora_after_task0=%s."
+            ),
             self.task0_shared_epochs,
             self.task0_shared_lr,
             self.shared_cls_epochs,
             self.shared_cls_lr,
+            self._use_shared_adapter(),
             self.freeze_shared_lora_after_task0,
         )
         logging.info(
@@ -241,6 +245,9 @@ class Learner(BaseLearner):
     def _set_shared_lora_requires_grad(self, requires_grad):
         self._backbone_module().cur_shared_adapter.requires_grad_(requires_grad)
 
+    def _use_shared_adapter(self):
+        return bool(getattr(self._backbone_module(), "use_shared_adapter", True))
+
     def _set_current_expert_requires_grad(self, requires_grad):
         backbone = self._backbone_module()
         backbone.cur_adapter.requires_grad_(requires_grad)
@@ -264,7 +271,7 @@ class Learner(BaseLearner):
         network_params.append(
             {
                 "params": self._network.fc_shared_cls.parameters(),
-                "lr": self.shared_cls_lr,
+                "lr": lr,
                 "weight_decay": self.shared_cls_weight_decay,
             }
         )
@@ -403,7 +410,9 @@ class Learner(BaseLearner):
         if epochs <= 0 or self._network.fc_shared_cls is None:
             return
 
-        train_shared_lora = not self.freeze_shared_lora_after_task0 or self._cur_task == 0
+        train_shared_lora = self._use_shared_adapter() and (
+            not self.freeze_shared_lora_after_task0 or self._cur_task == 0
+        )
         self._set_shared_lora_requires_grad(train_shared_lora)
         self._set_current_expert_requires_grad(False)
         self._set_expert_head_requires_grad(self._cur_task, False)
