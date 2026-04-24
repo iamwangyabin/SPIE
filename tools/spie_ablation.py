@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from torch.utils.data import DataLoader
 
 # Allow running this script directly from tools/ while importing repo modules.
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -26,6 +27,36 @@ def stable_softmax_np(logits: np.ndarray) -> np.ndarray:
     shifted = logits - np.max(logits, axis=1, keepdims=True)
     exp_logits = np.exp(shifted)
     return exp_logits / np.clip(exp_logits.sum(axis=1, keepdims=True), 1e-12, None)
+
+
+def logsumexp_np(x: np.ndarray, axis=1, keepdims=False):
+    max_value = np.max(x, axis=axis, keepdims=True)
+    out = max_value + np.log(np.exp(x - max_value).sum(axis=axis, keepdims=True) + 1e-12)
+    if not keepdims:
+        out = np.squeeze(out, axis=axis)
+    return out
+
+
+def to_jsonable(obj):
+    if isinstance(obj, dict):
+        return {key: to_jsonable(value) for key, value in obj.items()}
+    if isinstance(obj, list):
+        return [to_jsonable(value) for value in obj]
+    if isinstance(obj, tuple):
+        return [to_jsonable(value) for value in obj]
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        obj = float(obj)
+    if isinstance(obj, float):
+        if np.isinf(obj):
+            return "inf" if obj > 0 else "-inf"
+        if np.isnan(obj):
+            return "nan"
+        return obj
+    return obj
 
 
 def clean_marginal_fusion_probs_np(model, shared_logits, expert_logits_by_task):
@@ -101,6 +132,163 @@ def oracle_task_local_acc(model, shared_logits_np, expert_logits_by_task, y_true
     }
 
 
+def expert_ood_score_np(logits, score_type="energy"):
+    """
+    Larger score means the sample is more likely to be in-distribution for this expert.
+    """
+    if score_type == "energy":
+        return logsumexp_np(logits, axis=1) - np.log(logits.shape[1])
+
+    if score_type == "max_logit":
+        return np.max(logits, axis=1)
+
+    if score_type == "margin":
+        if logits.shape[1] < 2:
+            return np.zeros((logits.shape[0],), dtype=logits.dtype)
+        part = np.partition(logits, kth=-2, axis=1)
+        return part[:, -1] - part[:, -2]
+
+    if score_type == "msp":
+        prob = stable_softmax_np(logits)
+        return np.max(prob, axis=1)
+
+    if score_type == "neg_entropy":
+        prob = stable_softmax_np(logits)
+        entropy = -(prob * np.log(np.clip(prob, 1e-12, None))).sum(axis=1)
+        return -entropy
+
+    raise ValueError(f"Unknown score_type: {score_type}")
+
+
+def fit_threshold_balanced_acc(id_scores, ood_scores):
+    """
+    ID accepts when score > tau; OOD rejects when score <= tau.
+    """
+    if len(id_scores) == 0 or len(ood_scores) == 0:
+        return -np.inf, {
+            "balanced_acc": None,
+            "id_accept_rate": None,
+            "ood_reject_rate": None,
+        }
+
+    all_scores = np.concatenate([id_scores, ood_scores])
+    candidates = np.percentile(all_scores, np.linspace(0, 100, 501))
+    candidates = np.unique(candidates)
+
+    best_tau = candidates[0]
+    best_bal_acc = -1.0
+    best_id_accept = 0.0
+    best_ood_reject = 0.0
+
+    for tau in candidates:
+        id_accept = (id_scores > tau).mean()
+        ood_reject = (ood_scores <= tau).mean()
+        bal_acc = 0.5 * (id_accept + ood_reject)
+
+        if bal_acc > best_bal_acc:
+            best_tau = tau
+            best_bal_acc = bal_acc
+            best_id_accept = id_accept
+            best_ood_reject = ood_reject
+
+    return float(best_tau), {
+        "balanced_acc": float(best_bal_acc),
+        "id_accept_rate": float(best_id_accept),
+        "ood_reject_rate": float(best_ood_reject),
+    }
+
+
+def calibrate_future_ood_thresholds(
+    model,
+    expert_logits_by_task_calib,
+    y_calib,
+    score_type="energy",
+):
+    """
+    For expert t, fit ID as task t train samples and OOD as later-task train samples.
+    The last expert has no future OOD and is set to always accept.
+    """
+    tau_by_task = []
+    stats_by_task = []
+    task_ranges = list(model.task_class_ranges)
+    num_tasks = len(task_ranges)
+
+    for task_id, (start, end) in enumerate(task_ranges):
+        logits_t = expert_logits_by_task_calib[task_id]
+        scores_t = expert_ood_score_np(logits_t, score_type=score_type)
+
+        id_mask = (y_calib >= start) & (y_calib < end)
+        ood_mask = y_calib >= end
+
+        id_scores = scores_t[id_mask]
+        ood_scores = scores_t[ood_mask]
+
+        if task_id == num_tasks - 1 or len(ood_scores) == 0:
+            tau = -np.inf
+            stats = {
+                "task_id": task_id,
+                "tau": tau,
+                "num_id": int(len(id_scores)),
+                "num_ood_future": int(len(ood_scores)),
+                "balanced_acc": None,
+                "id_accept_rate": None,
+                "ood_reject_rate": None,
+                "note": "last task or no future OOD; always accept",
+            }
+        else:
+            tau, fit_stats = fit_threshold_balanced_acc(id_scores, ood_scores)
+            stats = {
+                "task_id": task_id,
+                "tau": tau,
+                "num_id": int(len(id_scores)),
+                "num_ood_future": int(len(ood_scores)),
+                **fit_stats,
+            }
+
+        tau_by_task.append(tau)
+        stats_by_task.append(stats)
+
+    return np.array(tau_by_task, dtype=np.float32), stats_by_task
+
+
+def ood_hard_accept_fusion_probs_np(
+    model,
+    shared_logits,
+    expert_logits_by_task,
+    tau_by_task,
+    score_type="energy",
+    use_shared_mass=True,
+):
+    """
+    Hard OOD-gated expert fusion. If every expert rejects a sample, fall back to
+    the shared posterior for that sample.
+    """
+    p_shared = stable_softmax_np(shared_logits).astype(np.float32)
+    p_final = np.zeros_like(p_shared, dtype=np.float32)
+
+    for task_id, (start, end) in enumerate(model.task_class_ranges):
+        expert_logits = expert_logits_by_task[task_id]
+        expert_local = stable_softmax_np(expert_logits).astype(np.float32)
+
+        scores = expert_ood_score_np(expert_logits, score_type=score_type)
+        accept = (scores > tau_by_task[task_id]).astype(np.float32)[:, None]
+
+        if use_shared_mass:
+            task_mass = p_shared[:, start:end].sum(axis=1, keepdims=True)
+            p_final[:, start:end] = task_mass * accept * expert_local
+        else:
+            p_final[:, start:end] = accept * expert_local
+
+    row_sum = p_final.sum(axis=1, keepdims=True)
+    zero_mask = row_sum[:, 0] <= 1e-12
+    p_final = p_final / np.clip(row_sum, 1e-12, None)
+
+    if np.any(zero_mask):
+        p_final[zero_mask] = p_shared[zero_mask]
+
+    return p_final
+
+
 def build_model_structure_without_training(model, data_manager, num_tasks):
     """
     Run incremental_train only to initialize task structure, heads, and loaders.
@@ -163,7 +351,22 @@ def main():
     parser.add_argument("--checkpoint", type=str, required=True, help="Path to a saved task_*.pkl checkpoint.")
     parser.add_argument("--device", type=str, default="0", help="CUDA id, or 'cpu'. Default: 0.")
     parser.add_argument("--seed", type=int, default=None, help="Override config seed.")
-    parser.add_argument("--output-json", type=str, default=None, help="Optional path to save top1 summary.")
+    parser.add_argument("--batch-size", type=int, default=None, help="Calibration loader batch size.")
+    parser.add_argument("--num-workers", type=int, default=None, help="Calibration loader worker count.")
+    parser.add_argument(
+        "--ood-scores",
+        type=str,
+        default="energy,max_logit,margin,msp,neg_entropy",
+        help="Comma-separated OOD score types.",
+    )
+    parser.add_argument(
+        "--output-json",
+        "--output",
+        dest="output_json",
+        type=str,
+        default=None,
+        help="Optional path to save summary json.",
+    )
     args_cli = parser.parse_args()
 
     with open(args_cli.config, "r") as f:
@@ -239,6 +442,7 @@ def main():
     model._network.to(device)
     model._network.eval()
 
+    print("\nCollecting test logits...")
     shared_logits_np, expert_logits_by_task, y_true = model._collect_eval_logits_np(
         model.test_loader
     )
@@ -296,12 +500,13 @@ def main():
         "clean_marginal_fusion": p_clean_accy["top1"],
         "product_marginal_fusion": p_product_accy["top1"],
     }
-    best_name = max(all_results, key=all_results.get)
-
-    print("\n========== Summary ==========")
-    for key, value in all_results.items():
-        print(f"{key:24s}: {value:.2f}")
-    print(f"\nBest top1: {best_name} = {all_results[best_name]:.2f}")
+    metric_results = {
+        "shared_fc": shared_accy,
+        "original_p_moe": p_moe_accy,
+        "original_p_final": p_final_accy,
+        "clean_marginal_fusion": p_clean_accy,
+        "product_marginal_fusion": p_product_accy,
+    }
 
     row_sum = p_clean.sum(axis=1)
     print(
@@ -319,13 +524,128 @@ def main():
         f"mean={product_row_sum.mean():.6f}",
     )
 
+    print("\nCollecting calibration logits on seen training data...")
+    batch_size = (
+        args_cli.batch_size
+        if args_cli.batch_size is not None
+        else int(args.get("batch_size", 128))
+    )
+    num_workers = (
+        args_cli.num_workers
+        if args_cli.num_workers is not None
+        else int(args.get("num_workers", 8))
+    )
+    calib_dataset = data_manager.get_dataset(
+        np.arange(0, model._total_classes),
+        source="train",
+        mode="test",
+    )
+    calib_loader = DataLoader(
+        calib_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=device.type == "cuda",
+    )
+    _, expert_logits_by_task_calib, y_calib = model._collect_eval_logits_np(calib_loader)
+
+    ood_score_types = [
+        score_type.strip()
+        for score_type in args_cli.ood_scores.split(",")
+        if score_type.strip()
+    ]
+    ood_calibration = {}
+    ood_probability_sum = {}
+
+    for score_type in ood_score_types:
+        tau_by_task, ood_stats = calibrate_future_ood_thresholds(
+            model,
+            expert_logits_by_task_calib,
+            y_calib,
+            score_type=score_type,
+        )
+
+        print(f"\n[OOD calibration: {score_type}]")
+        for stats in ood_stats:
+            bal_acc = stats["balanced_acc"]
+            id_accept = stats["id_accept_rate"]
+            ood_reject = stats["ood_reject_rate"]
+            print(
+                f"task {stats['task_id']:02d} | "
+                f"tau={stats['tau']} | "
+                f"ID={stats['num_id']} | "
+                f"future_OOD={stats['num_ood_future']} | "
+                f"bal_acc={None if bal_acc is None else round(bal_acc, 4)} | "
+                f"id_accept={None if id_accept is None else round(id_accept, 4)} | "
+                f"ood_reject={None if ood_reject is None else round(ood_reject, 4)}"
+            )
+
+        ood_calibration[score_type] = {
+            "tau_by_task": tau_by_task,
+            "stats": ood_stats,
+        }
+
+        p_ood_shared_mass = ood_hard_accept_fusion_probs_np(
+            model,
+            shared_logits_np,
+            expert_logits_by_task,
+            tau_by_task,
+            score_type=score_type,
+            use_shared_mass=True,
+        )
+        pred_ood_shared_mass = model._predict_topk_np(p_ood_shared_mass)
+        acc_ood_shared_mass = model._evaluate(pred_ood_shared_mass, y_true)
+        name_shared_mass = f"ood_{score_type}_shared_mass_accept_expert"
+        print_metric(name_shared_mass, acc_ood_shared_mass)
+        all_results[name_shared_mass] = acc_ood_shared_mass["top1"]
+        metric_results[name_shared_mass] = acc_ood_shared_mass
+
+        p_ood_expert_only = ood_hard_accept_fusion_probs_np(
+            model,
+            shared_logits_np,
+            expert_logits_by_task,
+            tau_by_task,
+            score_type=score_type,
+            use_shared_mass=False,
+        )
+        pred_ood_expert_only = model._predict_topk_np(p_ood_expert_only)
+        acc_ood_expert_only = model._evaluate(pred_ood_expert_only, y_true)
+        name_expert_only = f"ood_{score_type}_accept_expert_only"
+        print_metric(name_expert_only, acc_ood_expert_only)
+        all_results[name_expert_only] = acc_ood_expert_only["top1"]
+        metric_results[name_expert_only] = acc_ood_expert_only
+
+        ood_row_sum = p_ood_shared_mass.sum(axis=1)
+        ood_probability_sum[score_type] = {
+            "shared_mass": {
+                "min": float(ood_row_sum.min()),
+                "max": float(ood_row_sum.max()),
+                "mean": float(ood_row_sum.mean()),
+            }
+        }
+        print(
+            f"OOD fusion probability sum ({score_type}, shared_mass):",
+            f"min={ood_row_sum.min():.6f}",
+            f"max={ood_row_sum.max():.6f}",
+            f"mean={ood_row_sum.mean():.6f}",
+        )
+
+    best_name = max(all_results, key=all_results.get)
+
+    print("\n========== Summary ==========")
+    for key, value in all_results.items():
+        print(f"{key:45s}: {value:.2f}")
+    print(f"\nBest top1: {best_name} = {all_results[best_name]:.2f}")
+
     if args_cli.output_json:
         output = {
             "checkpoint": args_cli.checkpoint,
+            "config": args_cli.config,
             "task": target_task,
             "total_classes": int(ckpt["total_classes"]),
             "eval_known_classes": int(model._known_classes),
             "top1": all_results,
+            "metrics": metric_results,
             "oracle_task_local": oracle_local_accy,
             "best_top1": {"name": best_name, "value": all_results[best_name]},
             "clean_probability_sum": {
@@ -338,11 +658,13 @@ def main():
                 "max": float(product_row_sum.max()),
                 "mean": float(product_row_sum.mean()),
             },
+            "ood_calibration": ood_calibration,
+            "ood_probability_sum": ood_probability_sum,
         }
         output_path = Path(args_cli.output_json)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with output_path.open("w") as f:
-            json.dump(output, f, indent=2)
+            json.dump(to_jsonable(output), f, indent=2)
         print(f"\nSaved summary json: {output_path}")
 
 
