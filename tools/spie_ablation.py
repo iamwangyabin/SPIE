@@ -51,6 +51,38 @@ def clean_marginal_fusion_probs_np(model, shared_logits, expert_logits_by_task):
     return p_clean
 
 
+def oracle_task_local_acc(model, shared_logits_np, expert_logits_by_task, y_true):
+    shared_correct = 0
+    expert_correct = 0
+    total = len(y_true)
+
+    for i, y in enumerate(y_true):
+        true_task = None
+        local_y = None
+        for task_id, (start, end) in enumerate(model.task_class_ranges):
+            if start <= y < end:
+                true_task = task_id
+                local_y = y - start
+                break
+
+        if true_task is None:
+            raise ValueError(f"Target {int(y)} does not belong to any task class range.")
+
+        start, end = model.task_class_ranges[true_task]
+        shared_local_pred = np.argmax(shared_logits_np[i, start:end])
+        expert_local_pred = np.argmax(expert_logits_by_task[true_task][i])
+
+        if shared_local_pred == local_y:
+            shared_correct += 1
+        if expert_local_pred == local_y:
+            expert_correct += 1
+
+    return {
+        "shared_oracle_task_local_top1": 100.0 * shared_correct / total,
+        "expert_oracle_task_local_top1": 100.0 * expert_correct / total,
+    }
+
+
 def build_model_structure_without_training(model, data_manager, num_tasks):
     """
     Run incremental_train only to initialize task structure, heads, and loaders.
@@ -213,11 +245,21 @@ def main():
     )
     p_clean_pred = model._predict_topk_np(p_clean)
     p_clean_accy = model._evaluate(p_clean_pred, y_true)
+    oracle_local_accy = oracle_task_local_acc(
+        model,
+        shared_logits_np,
+        expert_logits_by_task,
+        y_true,
+    )
 
     print_metric("shared_fc", shared_accy)
     print_metric("original_p_moe", p_moe_accy)
     print_metric("original_p_final", p_final_accy)
     print_metric("clean_marginal_fusion", p_clean_accy)
+
+    print("\n[oracle_task_local]")
+    for key, value in oracle_local_accy.items():
+        print(f"{key}: {value:.2f}")
 
     all_results = {
         "shared_fc": shared_accy["top1"],
@@ -247,6 +289,7 @@ def main():
             "total_classes": int(ckpt["total_classes"]),
             "eval_known_classes": int(model._known_classes),
             "top1": all_results,
+            "oracle_task_local": oracle_local_accy,
             "best_top1": {"name": best_name, "value": all_results[best_name]},
             "clean_probability_sum": {
                 "min": float(row_sum.min()),
