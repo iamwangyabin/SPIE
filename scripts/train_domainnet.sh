@@ -24,9 +24,19 @@ run_tuna() {
     run_config "exps/tuna_domainnet_strong_20step.json" "bash-domainnet-tuna-strong-20step"
 }
 
+run_tuna_shuffle() {
+    run_config "exps/tuna_domainnet_normal_shuffle_10step.json" "bash-domainnet-tuna-normal-shuffle-10step"
+    run_config "exps/tuna_domainnet_normal_shuffle_20step.json" "bash-domainnet-tuna-normal-shuffle-20step"
+}
+
 run_spie() {
     run_config "exps/spie_domainnet_strong_10step.json" "bash-domainnet-spie-strong-10step"
     run_config "exps/spie_domainnet_strong_20step.json" "bash-domainnet-spie-strong-20step"
+}
+
+run_spie_shuffle() {
+    run_config "exps/spie_domainnet_normal_shuffle_10step.json" "bash-domainnet-spie-normal-shuffle-10step"
+    run_config "exps/spie_domainnet_normal_shuffle_20step.json" "bash-domainnet-spie-normal-shuffle-20step"
 }
 
 run_spie_moretrain() {
@@ -38,18 +48,28 @@ case "${TARGET}" in
     tuna)
         run_tuna
         ;;
+    tuna_shuffle)
+        run_tuna_shuffle
+        ;;
     spie)
         run_spie
         ;;
+    spie_shuffle)
+        run_spie_shuffle
+        ;;
     spie_moretrain)
         run_spie_moretrain
+        ;;
+    shuffle)
+        run_tuna_shuffle
+        run_spie_shuffle
         ;;
     all)
         run_tuna
         run_spie
         ;;
     *)
-        echo "Usage: $0 [tuna|spie|spie_moretrain|all]" >&2
+        echo "Usage: $0 [tuna|tuna_shuffle|spie|spie_shuffle|spie_moretrain|shuffle|all]" >&2
         exit 1
         ;;
 esac
