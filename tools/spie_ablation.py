@@ -51,6 +51,24 @@ def clean_marginal_fusion_probs_np(model, shared_logits, expert_logits_by_task):
     return p_clean
 
 
+def product_marginal_fusion_probs_np(model, shared_logits, expert_logits_by_task):
+    p_shared = stable_softmax_np(shared_logits).astype(np.float32)
+    p_final = np.zeros_like(p_shared, dtype=np.float32)
+
+    for task_id, (start, end) in enumerate(model.task_class_ranges):
+        block = p_shared[:, start:end]
+        task_mass = block.sum(axis=1, keepdims=True)
+        shared_local = block / np.clip(task_mass, 1e-12, None)
+        expert_local = stable_softmax_np(expert_logits_by_task[task_id]).astype(np.float32)
+
+        local = shared_local * expert_local
+        local = local / np.clip(local.sum(axis=1, keepdims=True), 1e-12, None)
+
+        p_final[:, start:end] = task_mass * local
+
+    return p_final
+
+
 def oracle_task_local_acc(model, shared_logits_np, expert_logits_by_task, y_true):
     shared_correct = 0
     expert_correct = 0
@@ -245,6 +263,15 @@ def main():
     )
     p_clean_pred = model._predict_topk_np(p_clean)
     p_clean_accy = model._evaluate(p_clean_pred, y_true)
+
+    p_product = product_marginal_fusion_probs_np(
+        model,
+        shared_logits_np,
+        expert_logits_by_task,
+    )
+    p_product_pred = model._predict_topk_np(p_product)
+    p_product_accy = model._evaluate(p_product_pred, y_true)
+
     oracle_local_accy = oracle_task_local_acc(
         model,
         shared_logits_np,
@@ -256,6 +283,7 @@ def main():
     print_metric("original_p_moe", p_moe_accy)
     print_metric("original_p_final", p_final_accy)
     print_metric("clean_marginal_fusion", p_clean_accy)
+    print_metric("product_marginal_fusion", p_product_accy)
 
     print("\n[oracle_task_local]")
     for key, value in oracle_local_accy.items():
@@ -266,6 +294,7 @@ def main():
         "original_p_moe": p_moe_accy["top1"],
         "original_p_final": p_final_accy["top1"],
         "clean_marginal_fusion": p_clean_accy["top1"],
+        "product_marginal_fusion": p_product_accy["top1"],
     }
     best_name = max(all_results, key=all_results.get)
 
@@ -282,6 +311,14 @@ def main():
         f"mean={row_sum.mean():.6f}",
     )
 
+    product_row_sum = p_product.sum(axis=1)
+    print(
+        "Product fusion probability sum:",
+        f"min={product_row_sum.min():.6f}",
+        f"max={product_row_sum.max():.6f}",
+        f"mean={product_row_sum.mean():.6f}",
+    )
+
     if args_cli.output_json:
         output = {
             "checkpoint": args_cli.checkpoint,
@@ -295,6 +332,11 @@ def main():
                 "min": float(row_sum.min()),
                 "max": float(row_sum.max()),
                 "mean": float(row_sum.mean()),
+            },
+            "product_probability_sum": {
+                "min": float(product_row_sum.min()),
+                "max": float(product_row_sum.max()),
+                "mean": float(product_row_sum.mean()),
             },
         }
         output_path = Path(args_cli.output_json)
