@@ -337,8 +337,8 @@ class Learner(SPIEBaseLearner):
 
         if not self.task_class_ranges:
             if return_task_route_prob:
-                return global_class_prob, global_class_prob, None
-            return global_class_prob, global_class_prob
+                return global_class_prob, None, None
+            return global_class_prob, None
 
         if posterior_router == "task_logmeanexp":
             task_route_prob = self._task_posterior_from_task_logmeanexp_np(global_class_logits)
@@ -360,10 +360,11 @@ class Learner(SPIEBaseLearner):
             local_prob = self._stable_softmax_np(expert_logits / expert_temperature).astype(np.float32)
             routed_expert_prob[:, start_idx:end_idx] = task_route_prob[:, task_id : task_id + 1] * local_prob
 
-        p_final = self.posterior_alpha * global_class_prob + (1.0 - self.posterior_alpha) * routed_expert_prob
+        # Legacy alpha fusion is no longer used by SPiE eval.
+        # p_final = self.posterior_alpha * global_class_prob + (1.0 - self.posterior_alpha) * routed_expert_prob
         if return_task_route_prob:
-            return routed_expert_prob, p_final, task_route_prob
-        return routed_expert_prob, p_final
+            return routed_expert_prob, None, task_route_prob
+        return routed_expert_prob, None
 
     def eval_task(self):
         global_class_logits_np, shared_features_np, expert_logits_by_task, y_true = self._collect_eval_pack_np(
