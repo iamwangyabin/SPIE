@@ -4,24 +4,18 @@ import math
 
 import numpy as np
 import torch
-from torch.nn import functional as F
-from tqdm import tqdm
 
 from models.spie_base import Learner as SPIEBaseLearner
-from utils.toolkit import tensor2numpy
 
 
 class Learner(SPIEBaseLearner):
-    """SPiE keeps the shared/expert heads, then adds posterior fusion and shape alignment."""
+    """SPiE keeps the shared/expert heads, then adds posterior fusion."""
 
     _spie_version_name = "SPiE"
 
     def __init__(self, args):
         super().__init__(args)
 
-        self.expert_shape_distill_lambda = float(args.get("expert_shape_distill_lambda", 0.1))
-        self.expert_shape_distill_temperature = float(args.get("expert_shape_distill_temperature", 2.0))
-        self.expert_shape_reg_cap_ratio = float(args.get("expert_shape_reg_cap_ratio", 0.25))
         self.posterior_task_temperature = float(args.get("posterior_task_temperature", 1.0))
         self.posterior_expert_temperature = float(args.get("posterior_expert_temperature", 1.0))
         self.posterior_shared_temperature = float(args.get("posterior_shared_temperature", 1.0))
@@ -31,12 +25,9 @@ class Learner(SPIEBaseLearner):
 
         logging.info(
             (
-                "SPiE expert shape distill: lambda=%s temperature=%s cap_ratio=%s. "
+                "SPiE expert branch trains without shared-logit distillation. "
                 "Posterior fusion: alpha=%s task_temperature=%s expert_temperature=%s shared_temperature=%s."
             ),
-            self.expert_shape_distill_lambda,
-            self.expert_shape_distill_temperature,
-            self.expert_shape_reg_cap_ratio,
             self.posterior_alpha,
             self.posterior_task_temperature,
             self.posterior_expert_temperature,
@@ -95,117 +86,6 @@ class Learner(SPIEBaseLearner):
         self._set_current_expert_requires_grad(False)
         self._set_expert_head_requires_grad(self._cur_task, False)
         backbone_module.adapter_update()
-
-    def _shape_distillation_loss(self, student_logits, teacher_logits):
-        if self.expert_shape_distill_lambda <= 0 or student_logits.shape[1] <= 1:
-            return student_logits.new_zeros(())
-
-        temperature = max(self.expert_shape_distill_temperature, 1e-6)
-        student_shape = self._zscore_tensor(student_logits, dim=1)
-        teacher_shape = self._zscore_tensor(teacher_logits, dim=1)
-        teacher_prob = F.softmax(teacher_shape / temperature, dim=1)
-        student_log_prob = F.log_softmax(student_shape / temperature, dim=1)
-        return F.kl_div(student_log_prob, teacher_prob, reduction="batchmean") * (temperature ** 2)
-
-    def _train_current_expert(self, train_loader, epochs, expert_lr, stage):
-        if epochs <= 0:
-            return
-
-        self._set_shared_lora_requires_grad(False)
-        self._set_current_expert_requires_grad(True)
-        self._set_expert_head_requires_grad(self._cur_task, True)
-
-        optimizer = self._current_expert_optimizer(expert_lr)
-        scheduler = self._get_scheduler_for_epochs(optimizer, epochs)
-        prog_bar = tqdm(range(epochs))
-        expert_head = self._network.get_expert_head(self._cur_task)
-        loss_cos = self._shape_aware_cosface()
-
-        for _, epoch in enumerate(prog_bar):
-            self._network.backbone.train()
-            expert_head.train()
-            losses = 0.0
-            ce_losses = 0.0
-            shape_losses = 0.0
-            shape_penalties = 0.0
-            correct, total = 0, 0
-
-            for _, (_, inputs, targets) in enumerate(train_loader):
-                inputs, targets = inputs.to(self._device), targets.to(self._device)
-                local_targets = targets - self._known_classes
-
-                with torch.no_grad():
-                    self._network.backbone.eval()
-                    self._network.fc_shared_cls.eval()
-                    shared_local_logits = self._shared_cls_logits(inputs)[:, self._known_classes : self._total_classes]
-                self._network.backbone.train()
-                expert_head.train()
-
-                expert_features = self._network.backbone(inputs, adapter_id=self._cur_task, train=True)["expert_features"]
-                expert_out = expert_head(expert_features)
-                logits = expert_out["logits"]
-
-                ce_loss = loss_cos(logits, local_targets)
-                shape_loss = self._shape_distillation_loss(logits, shared_local_logits)
-                shape_penalty = self.expert_shape_distill_lambda * shape_loss
-                if self.expert_shape_reg_cap_ratio > 0:
-                    shape_penalty = torch.minimum(
-                        shape_penalty,
-                        ce_loss.detach() * self.expert_shape_reg_cap_ratio,
-                    )
-                loss = ce_loss + shape_penalty
-
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-
-                losses += loss.item()
-                ce_losses += ce_loss.item()
-                shape_losses += shape_loss.item()
-                shape_penalties += shape_penalty.item()
-                preds = torch.argmax(logits, dim=1) + self._known_classes
-                correct += preds.eq(targets.expand_as(preds)).cpu().sum()
-                total += len(targets)
-
-            if scheduler:
-                scheduler.step()
-
-            train_acc = np.around(tensor2numpy(correct) * 100 / total, decimals=2)
-            lr = optimizer.param_groups[0]["lr"]
-            avg_loss = losses / len(train_loader)
-            avg_ce_loss = ce_losses / len(train_loader)
-            avg_shape_loss = shape_losses / len(train_loader)
-            avg_shape_penalty = shape_penalties / len(train_loader)
-            info = "Task {}, {}, Epoch {}/{} => Loss {:.3f}, Train_accy {:.2f}".format(
-                self._cur_task,
-                stage,
-                epoch + 1,
-                epochs,
-                avg_loss,
-                train_acc,
-            )
-            self._record_train_epoch(
-                epoch=epoch + 1,
-                total_epochs=epochs,
-                loss=float(avg_loss),
-                acc=float(train_acc),
-                lr=float(lr),
-                stage=stage,
-                ce_loss=float(avg_ce_loss),
-                shape_loss=float(avg_shape_loss),
-                shape_penalty=float(avg_shape_penalty),
-            )
-            prog_bar.set_description(info)
-
-        logging.info(info)
-
-    def _shape_aware_cosface(self):
-        return self._make_cosface_loss()
-
-    def _make_cosface_loss(self):
-        from models.tuna import AngularPenaltySMLoss
-
-        return AngularPenaltySMLoss(loss_type="cosface", eps=1e-7, s=self.args["scale"], m=self.args["m"])
 
     def _stable_softmax_np(self, logits):
         shifted = logits - np.max(logits, axis=1, keepdims=True)
