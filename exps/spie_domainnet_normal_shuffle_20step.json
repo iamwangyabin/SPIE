@@ -63,5 +63,6 @@
     "posterior_task_temperature": 1.0,
     "posterior_expert_temperature": 1.0,
     "posterior_shared_temperature": 1.0,
-    "posterior_alpha": 0.2
+    "posterior_alpha": 0.2,
+    "posterior_router": "prototype_activation"
 }
