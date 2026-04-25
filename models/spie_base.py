@@ -102,6 +102,7 @@ class Learner(BaseLearner):
     """Shared SPiE backbone/head implementation."""
 
     _spie_version_name = "SPiE"
+    _diag_lowrank_ca_methods = {"diag_lowrank", "lowrank_covariance"}
 
     def __init__(self, args):
         super().__init__(args)
@@ -165,6 +166,11 @@ class Learner(BaseLearner):
             self.incremental_expert_epochs,
             self.incremental_expert_lr,
         )
+        if self._is_diag_lowrank_ca_method():
+            logging.info(
+                "SPiE classifier alignment storage: diag_lowrank rank=%s.",
+                int(self.args.get("ca_lowrank_rank", 16)),
+            )
 
     def _backbone_module(self):
         if isinstance(self._network.backbone, nn.DataParallel):
@@ -331,6 +337,81 @@ class Learner(BaseLearner):
         repaired_covariance = covariance + eye * jitter
         scale_tril = torch.linalg.cholesky(repaired_covariance).to(dtype=torch.float32)
         return MultivariateNormal(mean, scale_tril=scale_tril)
+
+    def _is_diag_lowrank_ca_method(self):
+        return self.args["ca_storage_efficient_method"] in self._diag_lowrank_ca_methods
+
+    def _build_diag_lowrank_covariance(self, vectors, mean):
+        feature_dim = vectors.shape[-1]
+        requested_rank = int(self.args.get("ca_lowrank_rank", 16))
+        requested_rank = max(requested_rank, 0)
+        jitter = float(self.args["covariance_regularization"])
+
+        dtype = torch.float32
+        vectors = torch.nan_to_num(vectors.to(self._device, dtype=dtype), nan=0.0, posinf=0.0, neginf=0.0)
+        mean = mean.to(self._device, dtype=dtype)
+        centered = vectors - mean.unsqueeze(0)
+        sample_count = centered.shape[0]
+
+        if sample_count <= 1 or requested_rank == 0:
+            return {
+                "type": "diag_lowrank",
+                "diag": torch.full((feature_dim,), jitter, device=self._device, dtype=dtype),
+                "basis": torch.empty((feature_dim, 0), device=self._device, dtype=dtype),
+                "values": torch.empty((0,), device=self._device, dtype=dtype),
+                "rank": 0,
+            }
+
+        denom = max(sample_count - 1, 1)
+        diag_variance = centered.pow(2).sum(dim=0) / denom
+        effective_rank = min(requested_rank, sample_count - 1, feature_dim)
+
+        _, singular_values, vh = torch.linalg.svd(centered, full_matrices=False)
+        values = singular_values[:effective_rank].pow(2) / denom
+        basis = vh[:effective_rank].T.contiguous()
+
+        valid = values > 0
+        values = values[valid].contiguous()
+        basis = basis[:, valid].contiguous()
+
+        if values.numel() > 0:
+            lowrank_diag = (basis.pow(2) * values.unsqueeze(0)).sum(dim=1)
+            residual_diag = (diag_variance - lowrank_diag).clamp_min(0.0) + jitter
+        else:
+            residual_diag = diag_variance.clamp_min(0.0) + jitter
+
+        return {
+            "type": "diag_lowrank",
+            "diag": residual_diag.contiguous(),
+            "basis": basis,
+            "values": values,
+            "rank": int(values.numel()),
+        }
+
+    def _sample_diag_lowrank_distribution(self, mean, covariance, sample_count):
+        mean = mean.to(self._device, dtype=torch.float32)
+        diag = covariance["diag"].to(self._device, dtype=torch.float32).clamp_min(0.0)
+        basis = covariance["basis"].to(self._device, dtype=torch.float32)
+        values = covariance["values"].to(self._device, dtype=torch.float32).clamp_min(0.0)
+
+        samples = torch.randn(
+            sample_count,
+            mean.shape[-1],
+            device=self._device,
+            dtype=torch.float32,
+        ) * diag.sqrt().unsqueeze(0)
+
+        if values.numel() > 0:
+            lowrank_noise = torch.randn(
+                sample_count,
+                values.numel(),
+                device=self._device,
+                dtype=torch.float32,
+            )
+            scaled_basis = basis * values.sqrt().unsqueeze(0)
+            samples = samples + lowrank_noise @ scaled_basis.T
+
+        return samples + mean.unsqueeze(0)
 
     def _zscore_tensor(self, values, dim=-1, eps=1e-6):
         if values.shape[dim] <= 1:
@@ -752,13 +833,21 @@ class Learner(BaseLearner):
             vectors = torch.cat(vectors, dim=0)
 
             self.shared_cls_mean[class_idx] = vectors.mean(dim=0).to(self._device)
-            covariance = torch.cov(vectors.T) + (
-                torch.eye(self.shared_cls_mean[class_idx].shape[-1]) * 1e-4
-            ).to(self._device)
             if self.args["ca_storage_efficient_method"] == "covariance":
+                covariance = torch.cov(vectors.T) + (
+                    torch.eye(self.shared_cls_mean[class_idx].shape[-1]) * 1e-4
+                ).to(self._device)
                 self.shared_cls_cov[class_idx] = covariance
             elif self.args["ca_storage_efficient_method"] == "variance":
+                covariance = torch.cov(vectors.T) + (
+                    torch.eye(self.shared_cls_mean[class_idx].shape[-1]) * 1e-4
+                ).to(self._device)
                 self.shared_cls_cov[class_idx] = torch.diag(covariance)
+            elif self._is_diag_lowrank_ca_method():
+                self.shared_cls_cov[class_idx] = self._build_diag_lowrank_covariance(
+                    vectors,
+                    self.shared_cls_mean[class_idx],
+                )
             else:
                 raise NotImplementedError
 
@@ -780,7 +869,7 @@ class Learner(BaseLearner):
             sampled_label = []
             num_sampled_pcls = self.batch_size * 5
 
-            if self.args["ca_storage_efficient_method"] in ["covariance", "variance"]:
+            if self.args["ca_storage_efficient_method"] in ["covariance", "variance"] or self._is_diag_lowrank_ca_method():
                 for class_idx in range(self._total_classes):
                     if self.args["decay"]:
                         task_id = self._class_to_task_id(class_idx)
@@ -788,9 +877,13 @@ class Learner(BaseLearner):
                         mean = torch.tensor(mean_dict[class_idx], dtype=torch.float64).to(self._device) * (0.9 + decay)
                     else:
                         mean = mean_dict[class_idx].to(self._device)
-                    cov = cov_dict[class_idx].to(self._device)
-                    distribution = self._build_safe_distribution(mean, cov)
-                    sampled_data.append(distribution.sample(sample_shape=(num_sampled_pcls,)))
+                    if self._is_diag_lowrank_ca_method():
+                        cov = cov_dict[class_idx]
+                        sampled_data.append(self._sample_diag_lowrank_distribution(mean, cov, num_sampled_pcls))
+                    else:
+                        cov = cov_dict[class_idx].to(self._device)
+                        distribution = self._build_safe_distribution(mean, cov)
+                        sampled_data.append(distribution.sample(sample_shape=(num_sampled_pcls,)))
                     sampled_label.extend([class_idx] * num_sampled_pcls)
             else:
                 raise NotImplementedError
