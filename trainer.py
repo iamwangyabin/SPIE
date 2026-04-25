@@ -89,7 +89,7 @@ def _build_accuracy_matrix(matrix, labels):
 def _update_metric_store(store, metric_name, accy):
     metric_store = store.setdefault(
         metric_name,
-        {"curve": {"top1": [], "top5": []}, "matrix": [], "labels": []},
+        {"curve": {"top1": []}, "matrix": [], "labels": []},
     )
 
     grouped = accy.get("grouped", {})
@@ -98,7 +98,8 @@ def _update_metric_store(store, metric_name, accy):
     metric_store["matrix"].append(values)
     metric_store["labels"] = keys
     metric_store["curve"]["top1"].append(accy["top1"])
-    metric_store["curve"]["top5"].append(accy["top5"])
+    if "top5" in accy:
+        metric_store["curve"].setdefault("top5", []).append(accy["top5"])
     return metric_store
 
 
@@ -151,7 +152,7 @@ def _train(args):
     experiment_logger = ExperimentLogger(args)
     model = factory.get_model(args["model_name"], args)
 
-    cnn_curve, nme_curve = {"top1": [], "top5": []}, {"top1": [], "top5": []}
+    cnn_curve, nme_curve = {"top1": []}, {"top1": []}
     cnn_matrix, nme_matrix = [], []
     cnn_matrix_labels, nme_matrix_labels = [], []
     eval_variant_store = {}
@@ -206,15 +207,20 @@ def _train(args):
                 nme_matrix_labels = nme_keys
 
                 cnn_curve["top1"].append(cnn_accy["top1"])
-                cnn_curve["top5"].append(cnn_accy["top5"])
+                if "top5" in cnn_accy:
+                    cnn_curve.setdefault("top5", []).append(cnn_accy["top5"])
 
                 nme_curve["top1"].append(nme_accy["top1"])
-                nme_curve["top5"].append(nme_accy["top5"])
+                if "top5" in nme_accy:
+                    nme_curve.setdefault("top5", []).append(nme_accy["top5"])
 
                 logging.info("CNN top1 curve: {}".format(_to_builtin(cnn_curve["top1"])))
-                logging.info("CNN top5 curve: {}".format(_to_builtin(cnn_curve["top5"])))
                 logging.info("NME top1 curve: {}".format(_to_builtin(nme_curve["top1"])))
-                logging.info("NME top5 curve: {}\n".format(_to_builtin(nme_curve["top5"])))
+                if cnn_curve.get("top5"):
+                    logging.info("CNN top5 curve: {}".format(_to_builtin(cnn_curve["top5"])))
+                if nme_curve.get("top5"):
+                    logging.info("NME top5 curve: {}".format(_to_builtin(nme_curve["top5"])))
+                logging.info("")
 
                 avg_cnn = _average_float(cnn_curve["top1"])
                 avg_nme = _average_float(nme_curve["top1"])
@@ -233,10 +239,13 @@ def _train(args):
                 cnn_matrix_labels = cnn_keys
 
                 cnn_curve["top1"].append(cnn_accy["top1"])
-                cnn_curve["top5"].append(cnn_accy["top5"])
+                if "top5" in cnn_accy:
+                    cnn_curve.setdefault("top5", []).append(cnn_accy["top5"])
 
                 logging.info("CNN top1 curve: {}".format(_to_builtin(cnn_curve["top1"])))
-                logging.info("CNN top5 curve: {}\n".format(_to_builtin(cnn_curve["top5"])))
+                if cnn_curve.get("top5"):
+                    logging.info("CNN top5 curve: {}".format(_to_builtin(cnn_curve["top5"])))
+                logging.info("")
 
                 avg_cnn = _average_float(cnn_curve["top1"])
                 print("Average Accuracy (CNN):", "{:.2f}".format(avg_cnn))
@@ -249,7 +258,8 @@ def _train(args):
                     avg_variant_top1[variant_name] = _average_float(metric_store["curve"]["top1"])
                     logging.info("%s: %s", variant_name, _to_builtin(variant_accy["grouped"]))
                     logging.info("%s top1 curve: %s", variant_name, _to_builtin(metric_store["curve"]["top1"]))
-                    logging.info("%s top5 curve: %s", variant_name, _to_builtin(metric_store["curve"]["top5"]))
+                    if metric_store["curve"].get("top5"):
+                        logging.info("%s top5 curve: %s", variant_name, _to_builtin(metric_store["curve"]["top5"]))
                     logging.info("Average Accuracy (%s): %.2f", variant_name, avg_variant_top1[variant_name])
 
             experiment_logger.log_eval(

@@ -170,8 +170,9 @@ class ExperimentLogger:
     def _flatten_eval_metrics(self, prefix: str, accy: Dict[str, Any]) -> Dict[str, Any]:
         payload = {
             f"eval/{prefix}/top1": accy["top1"],
-            f"eval/{prefix}/top5": accy["top5"],
         }
+        if "top5" in accy:
+            payload[f"eval/{prefix}/top5"] = accy["top5"]
         grouped = accy.get("grouped", {})
         for key in ("total", "old", "new"):
             if key in grouped:

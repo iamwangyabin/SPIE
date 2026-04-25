@@ -49,6 +49,13 @@ class Learner(SPIEBaseLearner):
         self._eval_variants = {}
         return payload
 
+    def _drop_topk_metrics(self, accy):
+        return {
+            key: value
+            for key, value in accy.items()
+            if key == "top1" or not key.startswith("top")
+        }
+
     def _train(self, train_loader):
         backbone = self._network.backbone
         backbone_module = self._backbone_module()
@@ -363,12 +370,10 @@ class Learner(SPIEBaseLearner):
             self.test_loader
         )
 
-        shared_pred = self._predict_topk_np(global_class_logits_np)
-        routed_expert_prob, p_final, task_route_prob = self._posterior_fusion_probs_np(
+        routed_expert_prob, _ = self._posterior_fusion_probs_np(
             global_class_logits_np,
             expert_logits_by_task,
             shared_features=shared_features_np,
-            return_task_route_prob=True,
         )
 
         # NME: Prototype Bank Mixture — always uses task_max_proto routing, no alpha fusion.
@@ -382,40 +387,22 @@ class Learner(SPIEBaseLearner):
         )
 
         p_moe_pred = self._predict_topk_np(routed_expert_prob)
-        p_final_pred = self._predict_topk_np(p_final)
         prototype_mixture_pred = self._predict_topk_np(prototype_mixture_prob)
 
-        shared_accy = self._evaluate(shared_pred, y_true)
         p_moe_accy = self._evaluate(p_moe_pred, y_true)
-        p_final_accy = self._evaluate(p_final_pred, y_true)
         prototype_mixture_accy = self._evaluate(prototype_mixture_pred, y_true)
-        true_task = self._class_to_task_np(y_true)
-        task_route_acc = 100.0 * float((np.argmax(task_route_prob, axis=1) == true_task).mean())
-
-        self._eval_variants = {
-            "shared_fc": shared_accy,
-            "p_moe": p_moe_accy,
-            "p_final": p_final_accy,
-            "prototype_mixture": prototype_mixture_accy,
-            "task_acc": {
-                "top1": task_route_acc,
-                "top5": task_route_acc,
-                "grouped": {"total": task_route_acc},
-            },
-        }
+        p_moe_accy = self._drop_topk_metrics(p_moe_accy)
+        prototype_mixture_accy = self._drop_topk_metrics(prototype_mixture_accy)
+        self._eval_variants = {}
 
         logging.info(
             (
-                "SPiE eval variants: posterior_router=%s task_route_acc=%.2f "
-                "shared_fc_top1=%.2f p_moe_top1=%.2f p_final_top1=%.2f prototype_mixture_top1=%.2f alpha=%s."
+                "SPiE eval: cnn=p_moe nme=prototype_mixture "
+                "posterior_router=%s p_moe_top1=%.2f prototype_mixture_top1=%.2f."
             ),
             self.posterior_router,
-            task_route_acc,
-            shared_accy["top1"],
             p_moe_accy["top1"],
-            p_final_accy["top1"],
             prototype_mixture_accy["top1"],
-            self.posterior_alpha,
         )
 
-        return p_final_accy, prototype_mixture_accy
+        return p_moe_accy, prototype_mixture_accy
