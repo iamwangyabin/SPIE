@@ -25,7 +25,7 @@
     "min_lr": 0.0,
     "optimizer": "sgd",
     "scheduler": "cosine",
-    "ca_storage_efficient_method": "covariance",
+    "ca_storage_efficient_method": "variance",
     "decay": true,
     "r": 16,
     "scale": 20.0,
