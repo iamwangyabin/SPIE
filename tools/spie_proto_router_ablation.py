@@ -316,6 +316,135 @@ def make_hybrid_prototypes_np(weight_proto, mean_proto, eta: float):
     return normalize_np(proto.astype(np.float32), axis=1)
 
 
+
+def row_zscore_np(x: np.ndarray, eps: float = 1e-6) -> np.ndarray:
+    """Standardize each sample's class-energy vector before mixing evidence types."""
+    mean = np.mean(x, axis=1, keepdims=True)
+    std = np.std(x, axis=1, keepdims=True)
+    return ((x - mean) / np.clip(std, eps, None)).astype(np.float32)
+
+
+def build_mean_var_prototypes_np(
+    model,
+    loader,
+    weight_proto_fallback=None,
+    var_floor: float = 1e-4,
+    shrinkage: float = 0.0,
+):
+    """
+    One-pass feature statistics from the frozen shared branch.
+
+    Returns:
+      mean_proto_cos: L2-normalized class mean, for cosine prototype routing.
+      counts: number of feature samples per class.
+      mean_gauss: non-normalized mean of normalized features, for Gaussian energy.
+      var_gauss: diagonal variance of normalized features, for Gaussian energy.
+
+    This is eval-only: no gradient, no classifier update, no retraining.
+    """
+    model._network.eval()
+
+    total_classes = int(model._total_classes)
+    sums = None
+    sq_sums = None
+    counts = np.zeros((total_classes,), dtype=np.int64)
+
+    with torch.no_grad():
+        for _, (_, inputs, targets) in enumerate(loader):
+            inputs = inputs.to(model._device)
+            targets_np = targets.numpy()
+
+            res = model._network.backbone(inputs, adapter_id=-1, train=False)
+            feat = res["cls_features"]
+            feat_np = F.normalize(feat, p=2, dim=1).cpu().numpy().astype(np.float32)
+
+            if sums is None:
+                dim = feat_np.shape[1]
+                sums = np.zeros((total_classes, dim), dtype=np.float64)
+                sq_sums = np.zeros((total_classes, dim), dtype=np.float64)
+
+            for local_i, cls in enumerate(targets_np.tolist()):
+                cls = int(cls)
+                if 0 <= cls < total_classes:
+                    z = feat_np[local_i].astype(np.float64)
+                    sums[cls] += z
+                    sq_sums[cls] += z * z
+                    counts[cls] += 1
+
+    if sums is None:
+        raise RuntimeError("Empty loader while building mean/variance prototypes.")
+
+    total_count = max(int(counts.sum()), 1)
+    global_mean = sums.sum(axis=0) / total_count
+    global_var = sq_sums.sum(axis=0) / total_count - global_mean * global_mean
+    global_var = np.clip(global_var, var_floor, None)
+
+    safe_counts = np.maximum(counts[:, None], 1)
+    mean_gauss = sums / safe_counts
+    var_gauss = sq_sums / safe_counts - mean_gauss * mean_gauss
+
+    missing = counts == 0
+    if np.any(missing):
+        if weight_proto_fallback is None:
+            raise RuntimeError(
+                f"Missing classes in prototype loader: {np.where(missing)[0][:20]}"
+            )
+        mean_gauss[missing] = weight_proto_fallback[missing]
+        var_gauss[missing] = global_var[None, :]
+
+    shrinkage = min(max(float(shrinkage), 0.0), 1.0)
+    if shrinkage > 0.0:
+        var_gauss = (1.0 - shrinkage) * var_gauss + shrinkage * global_var[None, :]
+
+    var_gauss = np.clip(var_gauss, var_floor, None)
+    mean_gauss = mean_gauss.astype(np.float32)
+    var_gauss = var_gauss.astype(np.float32)
+    mean_proto_cos = normalize_np(mean_gauss, axis=1)
+
+    return mean_proto_cos, counts, mean_gauss, var_gauss
+
+
+def gaussian_class_energy_diag_np(
+    shared_features,
+    mean_gauss,
+    var_gauss,
+    gaussian_scale: float = 1.0,
+    use_logdet: bool = True,
+    var_floor: float = 1e-4,
+):
+    """
+    Diagonal-Gaussian class energy from stored feature mean/variance.
+
+    Uses the dimension-averaged Gaussian negative distance, not the full summed
+    log-likelihood, so the magnitude is stable across feature dimensions:
+
+      E_c(z) = -0.5 * mean_j [ (z_j - mu_cj)^2 / var_cj + log(var_cj) ]
+
+    If use_logdet=False, the log-variance term is omitted and this becomes a
+    variance-aware Mahalanobis prototype router.
+    """
+    z = normalize_np(shared_features.astype(np.float32), axis=1)
+    mu = mean_gauss.astype(np.float32)
+    var = np.clip(var_gauss.astype(np.float32), float(var_floor), None)
+    inv_var = 1.0 / var
+    dim = float(z.shape[1])
+
+    # Efficient expansion of sum_j (z_j - mu_cj)^2 / var_cj.
+    z2 = z * z
+    mu_inv = mu * inv_var
+    mu2_inv_sum = np.sum(mu * mu * inv_var, axis=1, keepdims=True).T
+    maha = z2 @ inv_var.T - 2.0 * (z @ mu_inv.T) + mu2_inv_sum
+    maha_mean = maha / max(dim, 1.0)
+
+    if use_logdet:
+        logdet_mean = np.mean(np.log(var), axis=1, keepdims=True).T
+        energy = -0.5 * (maha_mean + logdet_mean)
+    else:
+        energy = -0.5 * maha_mean
+
+    return (float(gaussian_scale) * energy).astype(np.float32)
+
+
 # -------------------------
 # Router / fusion
 # -------------------------
@@ -446,6 +575,11 @@ def main():
     parser.add_argument("--proto-scale", type=float, default=1.0, help="Scale for prototype cosine energy. Use 1.0 to match TunaLinear-style cosine logits.")
     parser.add_argument("--hybrid-etas", type=str, default="0.25,0.5,0.75", help="Comma-separated eta values: eta*weight + (1-eta)*mean.")
     parser.add_argument("--topk-values", type=str, default="1,3,5", help="Comma-separated top-k values for top-k prototype routing.")
+    parser.add_argument("--gaussian-scale", type=float, default=1.0, help="Scale for diagonal-Gaussian prototype energy.")
+    parser.add_argument("--gaussian-var-floor", type=float, default=1e-4, help="Variance floor for diagonal-Gaussian prototype energy.")
+    parser.add_argument("--gaussian-shrinkage", type=float, default=0.1, help="Shrink class variances toward global variance. 0 disables shrinkage.")
+    parser.add_argument("--no-gaussian-logdet", action="store_true", help="Omit log-variance term; use pure diagonal Mahalanobis energy.")
+    parser.add_argument("--energy-mix-lambdas", type=str, default="0.25,0.5,0.75,0.9", help="Comma-separated lambda values for lambda*weight_energy + (1-lambda)*gaussian_energy.")
     parser.add_argument("--output-json", "--output", dest="output_json", type=str, default=None, help="Optional path to save summary json.")
     args_cli = parser.parse_args()
 
@@ -591,10 +725,12 @@ def main():
     )
 
     weight_proto = get_shared_weight_prototypes_np(model)
-    mean_proto, mean_counts = build_mean_prototypes_np(
+    mean_proto, mean_counts, mean_gauss, var_gauss = build_mean_var_prototypes_np(
         model,
         proto_loader,
         weight_proto_fallback=weight_proto,
+        var_floor=float(args_cli.gaussian_var_floor),
+        shrinkage=float(args_cli.gaussian_shrinkage),
     )
 
     print(
@@ -602,6 +738,13 @@ def main():
         f"min={int(mean_counts.min())}",
         f"max={int(mean_counts.max())}",
         f"missing={int((mean_counts == 0).sum())}",
+    )
+    print(
+        "Gaussian variance:",
+        f"floor={float(args_cli.gaussian_var_floor):.2e}",
+        f"shrinkage={float(args_cli.gaussian_shrinkage):.2f}",
+        f"min={float(var_gauss.min()):.2e}",
+        f"max={float(var_gauss.max()):.2e}",
     )
 
     # -------------------------
@@ -641,6 +784,28 @@ def main():
         }
         return result
 
+    def run_energy_router(name, class_energy, topk=None):
+        p_task, task_logits = task_posterior_from_class_energy_np(
+            model,
+            class_energy,
+            task_temperature=float(model.posterior_task_temperature),
+            topk=topk,
+        )
+        result = evaluate_router(
+            model,
+            name,
+            p_task,
+            shared_logits_np,
+            expert_logits_by_task,
+            y_true,
+        )
+        result["task_logits_summary"] = {
+            "min": float(np.min(task_logits)),
+            "max": float(np.max(task_logits)),
+            "mean": float(np.mean(task_logits)),
+        }
+        return result
+
     results["weight_proto_router"] = run_proto_router(
         "weight_proto_router",
         weight_proto,
@@ -652,6 +817,38 @@ def main():
         mean_proto,
         topk=None,
     )
+
+    gaussian_energy = gaussian_class_energy_diag_np(
+        shared_features_np,
+        mean_gauss,
+        var_gauss,
+        gaussian_scale=float(args_cli.gaussian_scale),
+        use_logdet=not bool(args_cli.no_gaussian_logdet),
+        var_floor=float(args_cli.gaussian_var_floor),
+    )
+    gaussian_name = "diag_gaussian_router" if not args_cli.no_gaussian_logdet else "diag_mahalanobis_router"
+    results[gaussian_name] = run_energy_router(
+        gaussian_name,
+        gaussian_energy,
+        topk=None,
+    )
+
+    # Energy-level hybrid: discriminative classifier-weight energy + generative Gaussian energy.
+    # Per-sample z-scoring keeps the two evidence types on comparable scales.
+    weight_energy_for_mix = class_energy_from_prototypes_np(
+        shared_features_np,
+        weight_proto,
+        proto_scale=float(args_cli.proto_scale),
+    )
+    weight_energy_z = row_zscore_np(weight_energy_for_mix)
+    gaussian_energy_z = row_zscore_np(gaussian_energy)
+
+    mix_lambdas = parse_csv_floats(args_cli.energy_mix_lambdas)
+    for lam in mix_lambdas:
+        lam = min(max(float(lam), 0.0), 1.0)
+        mixed_energy = lam * weight_energy_z + (1.0 - lam) * gaussian_energy_z
+        key = f"energy_mix_router_lambda{lam:g}"
+        results[key] = run_energy_router(key, mixed_energy, topk=None)
 
     etas = parse_csv_floats(args_cli.hybrid_etas)
     topk_values = parse_csv_ints(args_cli.topk_values)
@@ -706,6 +903,11 @@ def main():
             "total_classes": int(ckpt["total_classes"]),
             "eval_known_classes": int(model._known_classes),
             "proto_scale": float(args_cli.proto_scale),
+            "gaussian_scale": float(args_cli.gaussian_scale),
+            "gaussian_var_floor": float(args_cli.gaussian_var_floor),
+            "gaussian_shrinkage": float(args_cli.gaussian_shrinkage),
+            "gaussian_use_logdet": not bool(args_cli.no_gaussian_logdet),
+            "energy_mix_lambdas": mix_lambdas,
             "hybrid_etas": etas,
             "topk_values": topk_values,
             "prototype_counts": {
