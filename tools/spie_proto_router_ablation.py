@@ -9,7 +9,7 @@ This script is intentionally a companion of tools/spie_ablation.py:
 - evaluates several task routers without retraining anything.
 
 Recommended use:
-python tools/spie_proto_router_ablation.py \
+python tools/spie_proto_activation_router_ablation.py \
   --config exps/spie/xxx.json \
   --checkpoint logs/.../checkpoints/task_9.pkl \
   --device 0 \
@@ -496,6 +496,102 @@ def task_posterior_from_class_energy_np(
     return stable_softmax_np(task_logits).astype(np.float32), task_logits
 
 
+
+def task_posterior_from_global_argmax_np(model, class_energy):
+    """
+    Hard class-first router.
+
+    First choose the globally most activated class prototype:
+        c*(x) = argmax_c E_c(x)
+    Then route to the task containing that class:
+        q(t|x) = 1[t = task(c*)]
+
+    This directly tests whether the class-level CRFC/prototype prediction
+    already gives a good task id. It has no temperature and no learned weight.
+    """
+    top_class = np.argmax(class_energy, axis=1).astype(np.int64)
+    top_task = class_to_task_ids(model, top_class)
+    p_task = np.zeros((class_energy.shape[0], len(get_task_ranges(model))), dtype=np.float32)
+    p_task[np.arange(class_energy.shape[0]), top_task] = 1.0
+    return p_task
+
+
+def task_posterior_from_task_max_np(
+    model,
+    class_energy,
+    task_temperature=1.0,
+):
+    """
+    Soft prototype-activation router.
+
+    Each task is represented by its most activated class prototype:
+        A_t(x) = max_{c in C_t} E_c(x)
+        q(t|x) = softmax_t(A_t(x) / T)
+
+    Compared with full log-mean-exp, this preserves the class classifier's
+    max-score decision principle while still returning a soft posterior.
+    """
+    temp = max(float(task_temperature), 1e-6)
+    num_samples = class_energy.shape[0]
+    task_ranges = get_task_ranges(model)
+    task_logits = np.zeros((num_samples, len(task_ranges)), dtype=np.float32)
+
+    for task_id, (start, end) in enumerate(task_ranges):
+        block = class_energy[:, start:end] / temp
+        if block.shape[1] == 0:
+            task_logits[:, task_id] = -np.inf
+        else:
+            task_logits[:, task_id] = np.max(block, axis=1)
+
+    return stable_softmax_np(task_logits).astype(np.float32), task_logits
+
+
+def task_posterior_from_global_topk_energy_np(
+    model,
+    class_energy,
+    global_topk: int,
+    task_temperature=1.0,
+):
+    """
+    Global top-k activation router.
+
+    Only the globally top-k activated class prototypes are allowed to vote.
+    For each task, aggregate the energies of its selected prototypes:
+        S_k(x) = TopK_c E_c(x)
+        A_t(x) = LogSumExp_{c in S_k(x) cap C_t} E_c(x)
+        q(t|x) = softmax_t(A_t(x) / T)
+
+    This avoids a failure mode of full task log-mean-exp: irrelevant medium-score
+    classes inside a wrong task cannot collectively lift that task unless they
+    are among the global top-k competitors.
+    """
+    k = max(1, min(int(global_topk), class_energy.shape[1]))
+    temp = max(float(task_temperature), 1e-6)
+    num_samples = class_energy.shape[0]
+    task_ranges = get_task_ranges(model)
+    task_logits = np.full((num_samples, len(task_ranges)), -np.inf, dtype=np.float32)
+
+    # Top-k largest energies for each sample.
+    top_idx = np.argpartition(class_energy, kth=class_energy.shape[1] - k, axis=1)[:, -k:]
+    top_vals = np.take_along_axis(class_energy, top_idx, axis=1) / temp
+
+    for task_id, (start, end) in enumerate(task_ranges):
+        in_task = (top_idx >= start) & (top_idx < end)
+        vals = np.where(in_task, top_vals, -np.inf)
+        max_vals = np.max(vals, axis=1, keepdims=True)
+        has_any = np.isfinite(max_vals[:, 0])
+        if not np.any(has_any):
+            continue
+
+        safe_vals = vals[has_any]
+        safe_max = max_vals[has_any]
+        task_logits[has_any, task_id] = np.squeeze(
+            safe_max + np.log(np.sum(np.exp(safe_vals - safe_max), axis=1, keepdims=True) + 1e-12),
+            axis=1,
+        )
+
+    return stable_softmax_np(task_logits).astype(np.float32), task_logits
+
 def task_posterior_oracle_np(model, y_true):
     task_ids = class_to_task_ids(model, y_true)
     p_task = np.zeros((len(y_true), len(get_task_ranges(model))), dtype=np.float32)
@@ -575,6 +671,7 @@ def main():
     parser.add_argument("--proto-scale", type=float, default=1.0, help="Scale for prototype cosine energy. Use 1.0 to match TunaLinear-style cosine logits.")
     parser.add_argument("--hybrid-etas", type=str, default="0.25,0.5,0.75", help="Comma-separated eta values: eta*weight + (1-eta)*mean.")
     parser.add_argument("--topk-values", type=str, default="1,3,5", help="Comma-separated top-k values for top-k prototype routing.")
+    parser.add_argument("--activation-topk-values", type=str, default="1,3,5", help="Comma-separated global top-k values for activation-based task routers.")
     parser.add_argument("--gaussian-scale", type=float, default=1.0, help="Scale for diagonal-Gaussian prototype energy.")
     parser.add_argument("--gaussian-var-floor", type=float, default=1e-4, help="Variance floor for diagonal-Gaussian prototype energy.")
     parser.add_argument("--gaussian-shrinkage", type=float, default=0.1, help="Shrink class variances toward global variance. 0 disables shrinkage.")
@@ -840,6 +937,71 @@ def main():
         weight_proto,
         proto_scale=float(args_cli.proto_scale),
     )
+
+    # -------------------------
+    # Activation-based routers
+    # -------------------------
+    # These are the least heuristic checks:
+    #   1) global argmax class -> task id
+    #   2) per-task max prototype activation
+    #   3) global top-k activated prototypes vote for tasks
+    #
+    # They answer the question:
+    #   If the CRFC / classifier-induced prototype has high class accuracy,
+    #   can its class activations be converted into task routing without
+    #   averaging over many irrelevant classes?
+    p_task_argmax = task_posterior_from_global_argmax_np(model, weight_energy_for_mix)
+    results["weight_proto_argmax_task_router"] = evaluate_router(
+        model,
+        "weight_proto_argmax_task_router",
+        p_task_argmax,
+        shared_logits_np,
+        expert_logits_by_task,
+        y_true,
+    )
+
+    p_task_max, task_logits_max = task_posterior_from_task_max_np(
+        model,
+        weight_energy_for_mix,
+        task_temperature=float(model.posterior_task_temperature),
+    )
+    results["weight_proto_task_max_router"] = evaluate_router(
+        model,
+        "weight_proto_task_max_router",
+        p_task_max,
+        shared_logits_np,
+        expert_logits_by_task,
+        y_true,
+    )
+    results["weight_proto_task_max_router"]["task_logits_summary"] = {
+        "min": float(np.min(task_logits_max)),
+        "max": float(np.max(task_logits_max)),
+        "mean": float(np.mean(task_logits_max)),
+    }
+
+    activation_topk_values = parse_csv_ints(args_cli.activation_topk_values)
+    for k in activation_topk_values:
+        p_task_topk, task_logits_topk = task_posterior_from_global_topk_energy_np(
+            model,
+            weight_energy_for_mix,
+            global_topk=k,
+            task_temperature=float(model.posterior_task_temperature),
+        )
+        key = f"global_top{k}_weight_proto_router"
+        results[key] = evaluate_router(
+            model,
+            key,
+            p_task_topk,
+            shared_logits_np,
+            expert_logits_by_task,
+            y_true,
+        )
+        results[key]["task_logits_summary"] = {
+            "min": float(np.min(task_logits_topk)),
+            "max": float(np.max(task_logits_topk)),
+            "mean": float(np.mean(task_logits_topk)),
+        }
+
     weight_energy_z = row_zscore_np(weight_energy_for_mix)
     gaussian_energy_z = row_zscore_np(gaussian_energy)
 
@@ -888,12 +1050,23 @@ def main():
         elif isinstance(value, dict) and "top1" in value:
             flat_top1[key] = value["top1"]
 
+    flat_task_acc = {
+        key: value["task_acc"]
+        for key, value in results.items()
+        if isinstance(value, dict) and "task_acc" in value
+    }
+
     best_name = max(flat_top1, key=flat_top1.get)
 
     print("\n========== Prototype Router Summary ==========")
     for key, value in flat_top1.items():
         print(f"{key:50s}: {value:.2f}")
     print(f"\nBest top1: {best_name} = {flat_top1[best_name]:.2f}")
+
+    if flat_task_acc:
+        print("\n========== Task Router Accuracy Summary ==========")
+        for key, value in flat_task_acc.items():
+            print(f"{key:50s}: {value:.2f}")
 
     if args_cli.output_json:
         output = {
@@ -910,6 +1083,7 @@ def main():
             "energy_mix_lambdas": mix_lambdas,
             "hybrid_etas": etas,
             "topk_values": topk_values,
+            "activation_topk_values": activation_topk_values,
             "prototype_counts": {
                 "min": int(mean_counts.min()),
                 "max": int(mean_counts.max()),
@@ -918,6 +1092,7 @@ def main():
             },
             "results": results,
             "flat_top1": flat_top1,
+            "flat_task_acc": flat_task_acc,
             "best_top1": {
                 "name": best_name,
                 "value": flat_top1[best_name],
