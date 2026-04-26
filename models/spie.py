@@ -398,12 +398,12 @@ class Learner(SPIEBaseLearner):
 
         logging.info(
             (
-                "SPiE eval: cnn=p_moe nme=prototype_mixture "
-                "posterior_router=%s p_moe_top1=%.2f prototype_mixture_top1=%.2f."
+                "SPiE eval: cnn=prototype_mixture nme=p_moe "
+                "posterior_router=%s prototype_mixture_top1=%.2f p_moe_top1=%.2f."
             ),
             self.posterior_router,
-            p_moe_accy["top1"],
             prototype_mixture_accy["top1"],
+            p_moe_accy["top1"],
         )
 
-        return p_moe_accy, prototype_mixture_accy
+        return prototype_mixture_accy, p_moe_accy
