@@ -1,3 +1,4 @@
+import json
 import os
 import numpy as np
 from torchvision import datasets, transforms
@@ -512,13 +513,24 @@ class Food(iData):
             self.test_data, self.test_targets = _load_food101_split(official_root, "test")
             return
 
+        train_dir = os.path.join(rootdir, "train")
+        test_dir = os.path.join(rootdir, "test")
+        if not os.path.isdir(train_dir) or not os.path.isdir(test_dir):
+            raise FileNotFoundError(
+                "Food dataset not found. Expected either custom food_train_txt/"
+                "food_test_txt, Food-101 official layout under food_root or "
+                "neighbor ./data/food-101 with images/ and meta/train.txt|json, "
+                "or ImageFolder directories {}/train and {}/test. Current "
+                "food_root={}".format(rootdir, rootdir, rootdir)
+            )
+
         self.train_data, self.train_targets, self.test_data, self.test_targets = (
             _load_path_list_or_imagefolder_split(
                 rootdir=rootdir,
                 train_txt=train_txt,
                 test_txt=test_txt,
-                default_train_dir=os.path.join(rootdir, "train"),
-                default_test_dir=os.path.join(rootdir, "test"),
+                default_train_dir=train_dir,
+                default_test_dir=test_dir,
             )
         )
 
@@ -621,11 +633,17 @@ def _resolve_food101_root(rootdir):
             continue
         seen.add(candidate)
 
-        if (
-            os.path.isdir(os.path.join(candidate, "images"))
-            and os.path.isfile(os.path.join(candidate, "meta", "train.txt"))
+        has_images = os.path.isdir(os.path.join(candidate, "images"))
+        has_txt_split = (
+            os.path.isfile(os.path.join(candidate, "meta", "train.txt"))
             and os.path.isfile(os.path.join(candidate, "meta", "test.txt"))
-        ):
+        )
+        has_json_split = (
+            os.path.isfile(os.path.join(candidate, "meta", "train.json"))
+            and os.path.isfile(os.path.join(candidate, "meta", "test.json"))
+        )
+
+        if has_images and (has_txt_split or has_json_split):
             return candidate
 
     return None
@@ -647,19 +665,50 @@ def _load_food101_split(rootdir, split):
     classes = _load_food101_classes(rootdir)
     class_to_idx = {class_name: index for index, class_name in enumerate(classes)}
     split_txt = os.path.join(rootdir, "meta", "{}.txt".format(split))
+    split_json = os.path.join(rootdir, "meta", "{}.json".format(split))
     images = []
     labels = []
 
-    with open(split_txt, "r") as split_file:
-        for line in split_file:
-            rel_path = line.strip()
-            if not rel_path:
-                continue
-            class_name = rel_path.split("/", 1)[0]
-            images.append(os.path.join(rootdir, "images", rel_path + ".jpg"))
-            labels.append(class_to_idx[class_name])
+    if os.path.isfile(split_txt):
+        with open(split_txt, "r") as split_file:
+            split_entries = [line.strip() for line in split_file if line.strip()]
+    elif os.path.isfile(split_json):
+        split_entries = _load_food101_json_entries(split_json, split)
+    else:
+        raise FileNotFoundError(
+            "Food-101 split file not found: expected {} or {}".format(
+                split_txt, split_json
+            )
+        )
+
+    for rel_path in split_entries:
+        class_name = rel_path.split("/", 1)[0]
+        images.append(os.path.join(rootdir, "images", rel_path + ".jpg"))
+        labels.append(class_to_idx[class_name])
 
     return np.array(images), np.array(labels)
+
+
+def _load_food101_json_entries(split_json, split):
+    with open(split_json, "r") as split_file:
+        metadata = json.load(split_file)
+
+    if isinstance(metadata, list):
+        return metadata
+
+    if split in metadata and isinstance(metadata[split], list):
+        return metadata[split]
+
+    entries = []
+    for class_name, class_entries in metadata.items():
+        if not isinstance(class_entries, list):
+            continue
+        for entry in class_entries:
+            if "/" in entry:
+                entries.append(entry)
+            else:
+                entries.append(os.path.join(class_name, entry))
+    return entries
 
 
 def _load_path_list_or_imagefolder_split(
