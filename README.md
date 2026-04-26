@@ -9,7 +9,7 @@
 - 统一入口：`main.py` 读取 JSON 配置并启动训练
 - 统一训练流程：`trainer.py` 管理 task-by-task 增量训练、评测、日志和 checkpoint
 - 多方法支持：`aper`、`aper_finetune`、`aper_ssf`、`aper_vpt`、`aper_adapter`、`l2p`、`dualprompt`、`coda_prompt`、`ease`、`slca`、`ranpac`、`fecam`、`cofima`、`tuna`、`tunamax`、`spie`、`ka_prompt`、`mqmk`、`onlymax`、`min`、`min_ablation`、`moal`、`mos`、`consistent_moe_prompt`、`arcl`、`vpt_nsp2pp`
-- 多数据集支持：`cifar224`、`imagenetr`、`imageneta`、`domainnet`、`officehome`、`nicopp`、`cub`、`objectnet`、`omnibenchmark`、`vtab`，以及基础的 `cifar10`、`cifar100`、`imagenet100`、`imagenet1000`
+- 多数据集支持：`cifar224`、`imagenetr`、`imageneta`、`domainnet`、`officehome`、`nicopp`、`cub`、`food`、`objectnet`、`omnibenchmark`、`vtab`，以及基础的 `cifar10`、`cifar100`、`imagenet100`、`imagenet1000`
 - 自动输出实验目录：日志、checkpoint、评测曲线和汇总指标都会落到 `logs/`
 - 可选 SwanLab 记录：大多数配置默认开启 `swanlab`
 
@@ -172,6 +172,9 @@ data/
 ├── cub/
 │   ├── train/
 │   └── test/
+├── food/
+│   ├── train/
+│   └── test/
 ├── objectnet/
 │   ├── train/
 │   └── test/
@@ -182,7 +185,7 @@ data/
 
 ### 列表文件或目录二选一
 
-这三类数据集支持两种读取方式：
+这些数据集支持两种读取方式：
 
 - 方式 1：在配置中指定根目录和 `train.txt` / `test.txt`
 - 方式 2：直接使用 `root/train` 和 `root/test` 的 `ImageFolder` 目录结构
@@ -192,6 +195,7 @@ data/
 - `domainnet_root`、`domainnet_train_txt`、`domainnet_test_txt`
 - `officehome_root`、`officehome_train_txt`、`officehome_test_txt`
 - `nicopp_root`、`nicopp_train_txt`、`nicopp_test_txt`
+- `food_root`、`food_train_txt`、`food_test_txt`
 
 当前仓库只自带了 DomainNet 的列表文件：
 

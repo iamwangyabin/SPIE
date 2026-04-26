@@ -15,6 +15,7 @@ from utils.data import (
     iOfficeHome,
     iNICOPP,
     CUB,
+    Food,
     objectnet,
     omnibenchmark,
     vtab,
@@ -252,6 +253,8 @@ def _get_idata(dataset_name, args=None):
         return iNICOPP(args)
     elif name == "cub":
         return CUB()
+    elif name in {"food", "food101", "food-101"}:
+        return Food(args)
     elif name == "objectnet":
         return objectnet()
     elif name == "omnibenchmark":

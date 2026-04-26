@@ -86,6 +86,7 @@ def build_transform_coda_prompt(is_train, args):
         "officehome",
         "nicopp",
         "cub",
+        "food",
         "objectnet",
         "omnibenchmark",
         "vtab",
@@ -483,6 +484,32 @@ class CUB(iData):
 
         self.train_data, self.train_targets = split_images_labels(train_dset.imgs)
         self.test_data, self.test_targets = split_images_labels(test_dset.imgs)
+
+
+class Food(iData):
+    def __init__(self, args=None):
+        super().__init__()
+        self.args = args or {}
+        self.use_path = True
+        self.train_trsf = build_transform(True, self.args)
+        self.test_trsf = build_transform(False, self.args)
+        self.common_trsf = []
+        self.class_order = np.arange(101).tolist()
+
+    def download_data(self):
+        rootdir = self.args.get("food_root", "./data/food")
+        train_txt = self.args.get("food_train_txt", "./utils/datautils/food/train.txt")
+        test_txt = self.args.get("food_test_txt", "./utils/datautils/food/test.txt")
+
+        self.train_data, self.train_targets, self.test_data, self.test_targets = (
+            _load_path_list_or_imagefolder_split(
+                rootdir=rootdir,
+                train_txt=train_txt,
+                test_txt=test_txt,
+                default_train_dir=os.path.join(rootdir, "train"),
+                default_test_dir=os.path.join(rootdir, "test"),
+            )
+        )
 
 
 class objectnet(iData):
