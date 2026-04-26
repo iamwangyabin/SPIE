@@ -635,12 +635,24 @@ def _resolve_food101_root(rootdir):
 
         has_images = os.path.isdir(os.path.join(candidate, "images"))
         has_txt_split = (
-            os.path.isfile(os.path.join(candidate, "meta", "train.txt"))
-            and os.path.isfile(os.path.join(candidate, "meta", "test.txt"))
+            (
+                os.path.isfile(os.path.join(candidate, "meta", "train.txt"))
+                and os.path.isfile(os.path.join(candidate, "meta", "test.txt"))
+            )
+            or (
+                os.path.isfile(os.path.join(candidate, "train.txt"))
+                and os.path.isfile(os.path.join(candidate, "test.txt"))
+            )
         )
         has_json_split = (
-            os.path.isfile(os.path.join(candidate, "meta", "train.json"))
-            and os.path.isfile(os.path.join(candidate, "meta", "test.json"))
+            (
+                os.path.isfile(os.path.join(candidate, "meta", "train.json"))
+                and os.path.isfile(os.path.join(candidate, "meta", "test.json"))
+            )
+            or (
+                os.path.isfile(os.path.join(candidate, "train.json"))
+                and os.path.isfile(os.path.join(candidate, "test.json"))
+            )
         )
 
         if has_images and (has_txt_split or has_json_split):
@@ -650,10 +662,15 @@ def _resolve_food101_root(rootdir):
 
 
 def _load_food101_classes(rootdir):
-    classes_txt = os.path.join(rootdir, "meta", "classes.txt")
-    if os.path.isfile(classes_txt):
-        with open(classes_txt, "r") as class_file:
-            return [line.strip() for line in class_file if line.strip()]
+    for classes_txt in (
+        os.path.join(rootdir, "classes.txt"),
+        os.path.join(rootdir, "meta", "classes.txt"),
+        os.path.join(rootdir, "labels.txt"),
+        os.path.join(rootdir, "meta", "labels.txt"),
+    ):
+        if os.path.isfile(classes_txt):
+            with open(classes_txt, "r") as class_file:
+                return [line.strip().split(maxsplit=1)[0] for line in class_file if line.strip()]
 
     images_dir = os.path.join(rootdir, "images")
     return sorted(
@@ -664,29 +681,49 @@ def _load_food101_classes(rootdir):
 def _load_food101_split(rootdir, split):
     classes = _load_food101_classes(rootdir)
     class_to_idx = {class_name: index for index, class_name in enumerate(classes)}
-    split_txt = os.path.join(rootdir, "meta", "{}.txt".format(split))
-    split_json = os.path.join(rootdir, "meta", "{}.json".format(split))
+    split_txt_candidates = (
+        os.path.join(rootdir, "{}.txt".format(split)),
+        os.path.join(rootdir, "meta", "{}.txt".format(split)),
+    )
+    split_json_candidates = (
+        os.path.join(rootdir, "{}.json".format(split)),
+        os.path.join(rootdir, "meta", "{}.json".format(split)),
+    )
     images = []
     labels = []
 
-    if os.path.isfile(split_txt):
-        with open(split_txt, "r") as split_file:
-            split_entries = [line.strip() for line in split_file if line.strip()]
-    elif os.path.isfile(split_json):
+    split_txt = next((path for path in split_txt_candidates if os.path.isfile(path)), None)
+    split_json = next((path for path in split_json_candidates if os.path.isfile(path)), None)
+
+    if split_txt is not None:
+        split_entries = _load_food101_txt_entries(split_txt)
+    elif split_json is not None:
         split_entries = _load_food101_json_entries(split_json, split)
     else:
         raise FileNotFoundError(
-            "Food-101 split file not found: expected {} or {}".format(
-                split_txt, split_json
+            "Food-101 split file not found under {}: expected {}.txt or {}.json "
+            "in the dataset root or meta/.".format(
+                rootdir, split, split
             )
         )
 
     for rel_path in split_entries:
-        class_name = rel_path.split("/", 1)[0]
-        images.append(os.path.join(rootdir, "images", rel_path + ".jpg"))
+        image_path, class_name = _resolve_food101_image_entry(rootdir, rel_path)
+        images.append(image_path)
         labels.append(class_to_idx[class_name])
 
     return np.array(images), np.array(labels)
+
+
+def _load_food101_txt_entries(split_txt):
+    entries = []
+    with open(split_txt, "r") as split_file:
+        for line in split_file:
+            line = line.strip()
+            if not line:
+                continue
+            entries.append(line.rsplit(maxsplit=1)[0])
+    return entries
 
 
 def _load_food101_json_entries(split_json, split):
@@ -709,6 +746,18 @@ def _load_food101_json_entries(split_json, split):
             else:
                 entries.append(os.path.join(class_name, entry))
     return entries
+
+
+def _resolve_food101_image_entry(rootdir, rel_path):
+    rel_path = rel_path.strip()
+    if rel_path.endswith((".jpg", ".jpeg", ".png")):
+        rel_path_no_ext = os.path.splitext(rel_path)[0]
+    else:
+        rel_path_no_ext = rel_path
+
+    class_name = rel_path_no_ext.split("/", 1)[0]
+    image_path = os.path.join(rootdir, "images", rel_path_no_ext + ".jpg")
+    return image_path, class_name
 
 
 def _load_path_list_or_imagefolder_split(
