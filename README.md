@@ -197,6 +197,18 @@ data/
 - `nicopp_root`、`nicopp_train_txt`、`nicopp_test_txt`
 - `food_root`、`food_train_txt`、`food_test_txt`
 
+`food` 还支持 Food-101 官方目录结构，例如：
+
+```text
+data/
+└── food-101/
+    ├── images/
+    └── meta/
+        ├── classes.txt
+        ├── train.txt
+        └── test.txt
+```
+
 当前仓库只自带了 DomainNet 的列表文件：
 
 - [utils/datautils/domainnet/train.txt](/Users/wangyabin/Documents/GitHub/SPIE/utils/datautils/domainnet/train.txt)

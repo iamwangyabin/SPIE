@@ -501,6 +501,17 @@ class Food(iData):
         train_txt = self.args.get("food_train_txt", "./utils/datautils/food/train.txt")
         test_txt = self.args.get("food_test_txt", "./utils/datautils/food/test.txt")
 
+        if os.path.isfile(train_txt) and os.path.isfile(test_txt):
+            self.train_data, self.train_targets = _load_path_label_list(rootdir, train_txt)
+            self.test_data, self.test_targets = _load_path_label_list(rootdir, test_txt)
+            return
+
+        official_root = _resolve_food101_root(rootdir)
+        if official_root is not None:
+            self.train_data, self.train_targets = _load_food101_split(official_root, "train")
+            self.test_data, self.test_targets = _load_food101_split(official_root, "test")
+            return
+
         self.train_data, self.train_targets, self.test_data, self.test_targets = (
             _load_path_list_or_imagefolder_split(
                 rootdir=rootdir,
@@ -591,6 +602,62 @@ def _load_path_label_list(rootdir, txt_path):
             value, key = line.rsplit(" ", 1)
             images.append(os.path.join(rootdir, value))
             labels.append(int(key))
+
+    return np.array(images), np.array(labels)
+
+
+def _resolve_food101_root(rootdir):
+    candidates = [
+        rootdir,
+        os.path.join(rootdir, "food-101"),
+        os.path.join(os.path.dirname(rootdir), "food-101"),
+        "./data/food-101",
+    ]
+    seen = set()
+
+    for candidate in candidates:
+        candidate = os.path.normpath(candidate)
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+
+        if (
+            os.path.isdir(os.path.join(candidate, "images"))
+            and os.path.isfile(os.path.join(candidate, "meta", "train.txt"))
+            and os.path.isfile(os.path.join(candidate, "meta", "test.txt"))
+        ):
+            return candidate
+
+    return None
+
+
+def _load_food101_classes(rootdir):
+    classes_txt = os.path.join(rootdir, "meta", "classes.txt")
+    if os.path.isfile(classes_txt):
+        with open(classes_txt, "r") as class_file:
+            return [line.strip() for line in class_file if line.strip()]
+
+    images_dir = os.path.join(rootdir, "images")
+    return sorted(
+        entry.name for entry in os.scandir(images_dir) if entry.is_dir()
+    )
+
+
+def _load_food101_split(rootdir, split):
+    classes = _load_food101_classes(rootdir)
+    class_to_idx = {class_name: index for index, class_name in enumerate(classes)}
+    split_txt = os.path.join(rootdir, "meta", "{}.txt".format(split))
+    images = []
+    labels = []
+
+    with open(split_txt, "r") as split_file:
+        for line in split_file:
+            rel_path = line.strip()
+            if not rel_path:
+                continue
+            class_name = rel_path.split("/", 1)[0]
+            images.append(os.path.join(rootdir, "images", rel_path + ".jpg"))
+            labels.append(class_to_idx[class_name])
 
     return np.array(images), np.array(labels)
 
