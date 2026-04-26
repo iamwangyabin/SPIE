@@ -16,6 +16,9 @@ case "${STEP}" in
     10)
         run_config "exps/spie_cub_10step.json" "bash-cub-10step"
         ;;
+    10-rank4|10-lowrank4|rank4)
+        run_config "exps/spie_cub_10step_lowrank4.json" "bash-cub-10step-lowrank4"
+        ;;
     20)
         run_config "exps/spie_cub_20step.json" "bash-cub-20step"
         ;;
@@ -28,7 +31,7 @@ case "${STEP}" in
         run_config "exps/spie_cub_50step.json" "bash-cub-50step"
         ;;
     *)
-        echo "Usage: $0 [10|20|50|all]" >&2
+        echo "Usage: $0 [10|10-rank4|10-lowrank4|rank4|20|50|all]" >&2
         exit 1
         ;;
 esac
