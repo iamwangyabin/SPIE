@@ -19,9 +19,9 @@
         1996,
         1997
     ],
-    "swanlab": false,
+    "swanlab": true,
     "swanlab_project": "SPIE",
-    "swanlab_mode": "offline",
+    "swanlab_mode": "online",
     "ssiat_official_seed_behavior": true,
     "init_epochs": 20,
     "inc_epochs": 10,

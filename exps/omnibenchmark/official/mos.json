@@ -43,8 +43,8 @@
     "drop": 0,
     "drop_path": 0,
     "ffn_num": 16,
-    "swanlab": false,
+    "swanlab": true,
     "swanlab_project": "SPIE",
-    "swanlab_mode": "offline",
+    "swanlab_mode": "online",
     "omnibenchmark_root": "./data/omnibenchmark"
 }

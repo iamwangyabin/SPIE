@@ -16,9 +16,9 @@
     "seed": [
         1993
     ],
-    "swanlab": false,
+    "swanlab": true,
     "swanlab_project": "SPIE",
-    "swanlab_mode": "offline",
+    "swanlab_mode": "online",
     "tuned_epoch": 10,
     "init_lr": 0.001875,
     "batch_size": 32,
