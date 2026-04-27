@@ -14,18 +14,18 @@ run_config() {
 
 case "${STEP}" in
     10)
-        run_config "exps/min_cub_10step.json" "bash-min-cub-10step"
+        run_config "exps/cub/min_cub_10step.json" "bash-min-cub-10step"
         ;;
     20)
-        run_config "exps/min_cub_20step.json" "bash-min-cub-20step"
+        run_config "exps/cub/min_cub_20step.json" "bash-min-cub-20step"
         ;;
     50)
-        run_config "exps/min_cub_50step.json" "bash-min-cub-50step"
+        run_config "exps/cub/min_cub_50step.json" "bash-min-cub-50step"
         ;;
     all)
-        run_config "exps/min_cub_10step.json" "bash-min-cub-10step"
-        run_config "exps/min_cub_20step.json" "bash-min-cub-20step"
-        run_config "exps/min_cub_50step.json" "bash-min-cub-50step"
+        run_config "exps/cub/min_cub_10step.json" "bash-min-cub-10step"
+        run_config "exps/cub/min_cub_20step.json" "bash-min-cub-20step"
+        run_config "exps/cub/min_cub_50step.json" "bash-min-cub-50step"
         ;;
     *)
         echo "Usage: $0 [10|20|50|all]" >&2

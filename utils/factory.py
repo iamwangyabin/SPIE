@@ -2,6 +2,8 @@ def get_model(model_name, args):
     name = model_name.lower()
     if name == "aper":
         from models.aper import Learner
+    elif name == "acil":
+        from models.acil import Learner
     elif name == "aper_finetune":
         from models.aper_finetune import Learner
     elif name == "aper_ssf":
@@ -56,7 +58,7 @@ def get_model(model_name, args):
         from models.ssiat import Learner
     else:
         raise ValueError(
-            "Supported model names are 'aper', 'aper_finetune', 'aper_ssf', "
+            "Supported model names are 'aper', 'acil', 'aper_finetune', 'aper_ssf', "
             "'aper_vpt', 'aper_adapter', 'l2p', 'dualprompt', 'coda_prompt', 'ease', 'slca', "
             "'ranpac', 'fecam', 'cofima', 'tuna', 'tunamax', 'spie', 'ka_prompt', "
             "'mqmk', 'onlymax', 'min', 'min_ablation', 'moal', 'mos', 'ssiat', "

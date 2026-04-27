@@ -1,0 +1,30 @@
+{
+    "prefix": "generated-acil-domainnet",
+    "dataset": "domainnet",
+    "memory_size": 0,
+    "memory_per_class": 0,
+    "fixed_memory": false,
+    "shuffle": true,
+    "init_cls": 20,
+    "increment": 20,
+    "model_name": "acil",
+    "backbone_type": "pretrained_vit_b16_224",
+    "device": [
+        "0"
+    ],
+    "seed": [
+        1993
+    ],
+    "swanlab": false,
+    "swanlab_project": "SPIE",
+    "swanlab_mode": "offline",
+    "pretrained": true,
+    "batch_size": 128,
+    "fit_batch_size": 128,
+    "buffer_size": 2048,
+    "gamma": 1,
+    "use_input_norm": false,
+    "num_workers": 4,
+    "domainnet_protocol": "official",
+    "domainnet_root": "./data/domainnet"
+}

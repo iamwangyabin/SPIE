@@ -40,7 +40,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--config-glob",
-        default="exps/*domainnet*.json",
+        default="exps/domainnet/**/*.json",
         help="Glob pattern, relative to repo root, used to select configs.",
     )
     parser.add_argument(

@@ -14,18 +14,18 @@ run_config() {
 
 case "${STEP}" in
     10)
-        run_config "exps/spie_cifar_10step.json" "bash-cifar-10step"
+        run_config "exps/cifar224/spie_cifar_10step.json" "bash-cifar-10step"
         ;;
     20)
-        run_config "exps/spie_cifar_20step.json" "bash-cifar-20step"
+        run_config "exps/cifar224/spie_cifar_20step.json" "bash-cifar-20step"
         ;;
     50)
-        run_config "exps/spie_cifar_50step.json" "bash-cifar-50step"
+        run_config "exps/cifar224/spie_cifar_50step.json" "bash-cifar-50step"
         ;;
     all)
-        run_config "exps/spie_cifar_10step.json" "bash-cifar-10step"
-        run_config "exps/spie_cifar_20step.json" "bash-cifar-20step"
-        run_config "exps/spie_cifar_50step.json" "bash-cifar-50step"
+        run_config "exps/cifar224/spie_cifar_10step.json" "bash-cifar-10step"
+        run_config "exps/cifar224/spie_cifar_20step.json" "bash-cifar-20step"
+        run_config "exps/cifar224/spie_cifar_50step.json" "bash-cifar-50step"
         ;;
     *)
         echo "Usage: $0 [10|20|50|all]" >&2

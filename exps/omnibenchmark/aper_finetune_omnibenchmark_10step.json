@@ -1,0 +1,28 @@
+{
+    "prefix": "aper-finetune-omnibenchmark-10step",
+    "dataset": "omnibenchmark",
+    "memory_size": 0,
+    "memory_per_class": 0,
+    "fixed_memory": false,
+    "shuffle": true,
+    "init_cls": 30,
+    "increment": 30,
+    "model_name": "aper_finetune",
+    "weight_decay": 0.0005,
+    "optimizer": "sgd",
+    "min_lr": 0,
+    "device": [
+        "0"
+    ],
+    "seed": [
+        1993
+    ],
+    "tuned_epoch": 5,
+    "init_lr": 0.01,
+    "batch_size": 128,
+    "backbone_type": "pretrained_vit_b16_224_in21k",
+    "swanlab": true,
+    "swanlab_project": "SPIE",
+    "swanlab_mode": "online",
+    "omnibenchmark_root": "./data/omnibenchmark"
+}

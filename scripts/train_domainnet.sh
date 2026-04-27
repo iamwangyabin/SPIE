@@ -20,38 +20,38 @@ run_config() {
 }
 
 run_tuna() {
-    run_config "exps/tuna_domainnet_strong_10step.json" "bash-domainnet-tuna-strong-10step"
-    run_config "exps/tuna_domainnet_strong_20step.json" "bash-domainnet-tuna-strong-20step"
+    run_config "exps/domainnet/tuna_domainnet_strong_10step.json" "bash-domainnet-tuna-strong-10step"
+    run_config "exps/domainnet/tuna_domainnet_strong_20step.json" "bash-domainnet-tuna-strong-20step"
 }
 
 run_tuna_shuffle() {
-    run_config "exps/tuna_domainnet_normal_shuffle_10step.json" "bash-domainnet-tuna-normal-shuffle-10step"
-    run_config "exps/tuna_domainnet_normal_shuffle_20step.json" "bash-domainnet-tuna-normal-shuffle-20step"
+    run_config "exps/domainnet/tuna_domainnet_normal_shuffle_10step.json" "bash-domainnet-tuna-normal-shuffle-10step"
+    run_config "exps/domainnet/tuna_domainnet_normal_shuffle_20step.json" "bash-domainnet-tuna-normal-shuffle-20step"
 }
 
 run_tuna_easy() {
-    run_config "exps/tuna_domainnet_easy_10step.json" "bash-domainnet-tuna-easy-10step"
-    run_config "exps/tuna_domainnet_easy_20step.json" "bash-domainnet-tuna-easy-20step"
+    run_config "exps/domainnet/tuna_domainnet_easy_10step.json" "bash-domainnet-tuna-easy-10step"
+    run_config "exps/domainnet/tuna_domainnet_easy_20step.json" "bash-domainnet-tuna-easy-20step"
 }
 
 run_spie() {
-    run_config "exps/spie_domainnet_strong_10step.json" "bash-domainnet-spie-strong-10step"
-    run_config "exps/spie_domainnet_strong_20step.json" "bash-domainnet-spie-strong-20step"
+    run_config "exps/domainnet/spie_domainnet_strong_10step.json" "bash-domainnet-spie-strong-10step"
+    run_config "exps/domainnet/spie_domainnet_strong_20step.json" "bash-domainnet-spie-strong-20step"
 }
 
 run_spie_shuffle() {
-    run_config "exps/spie_domainnet_normal_shuffle_10step.json" "bash-domainnet-spie-normal-shuffle-10step"
-    run_config "exps/spie_domainnet_normal_shuffle_20step.json" "bash-domainnet-spie-normal-shuffle-20step"
+    run_config "exps/domainnet/spie_domainnet_normal_shuffle_10step.json" "bash-domainnet-spie-normal-shuffle-10step"
+    run_config "exps/domainnet/spie_domainnet_normal_shuffle_20step.json" "bash-domainnet-spie-normal-shuffle-20step"
 }
 
 run_spie_easy() {
-    run_config "exps/spie_domainnet_easy_10step.json" "bash-domainnet-spie-easy-10step"
-    run_config "exps/spie_domainnet_easy_20step.json" "bash-domainnet-spie-easy-20step"
+    run_config "exps/domainnet/spie_domainnet_easy_10step.json" "bash-domainnet-spie-easy-10step"
+    run_config "exps/domainnet/spie_domainnet_easy_20step.json" "bash-domainnet-spie-easy-20step"
 }
 
 run_spie_moretrain() {
-    run_config "exps/spie_domainnet_strong_10step_moretrain.json" "bash-domainnet-spie-strong-10step-moretrain"
-    run_config "exps/spie_domainnet_strong_20step_moretrain.json" "bash-domainnet-spie-strong-20step-moretrain"
+    run_config "exps/domainnet/spie_domainnet_strong_10step_moretrain.json" "bash-domainnet-spie-strong-10step-moretrain"
+    run_config "exps/domainnet/spie_domainnet_strong_20step_moretrain.json" "bash-domainnet-spie-strong-20step-moretrain"
 }
 
 case "${TARGET}" in

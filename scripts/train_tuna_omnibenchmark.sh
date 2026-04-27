@@ -14,18 +14,18 @@ run_config() {
 
 case "${STEP}" in
     10)
-        run_config "exps/tuna_omnibenchmark_10step.json" "bash-omnibenchmark-10step"
+        run_config "exps/omnibenchmark/tuna_omnibenchmark_10step.json" "bash-omnibenchmark-10step"
         ;;
     20)
-        run_config "exps/tuna_omnibenchmark_20step.json" "bash-omnibenchmark-20step"
+        run_config "exps/omnibenchmark/tuna_omnibenchmark_20step.json" "bash-omnibenchmark-20step"
         ;;
     50)
-        run_config "exps/tuna_omnibenchmark_50step.json" "bash-omnibenchmark-50step"
+        run_config "exps/omnibenchmark/tuna_omnibenchmark_50step.json" "bash-omnibenchmark-50step"
         ;;
     all)
-        run_config "exps/tuna_omnibenchmark_10step.json" "bash-omnibenchmark-10step"
-        run_config "exps/tuna_omnibenchmark_20step.json" "bash-omnibenchmark-20step"
-        run_config "exps/tuna_omnibenchmark_50step.json" "bash-omnibenchmark-50step"
+        run_config "exps/omnibenchmark/tuna_omnibenchmark_10step.json" "bash-omnibenchmark-10step"
+        run_config "exps/omnibenchmark/tuna_omnibenchmark_20step.json" "bash-omnibenchmark-20step"
+        run_config "exps/omnibenchmark/tuna_omnibenchmark_50step.json" "bash-omnibenchmark-50step"
         ;;
     *)
         echo "Usage: $0 [10|20|50|all]" >&2

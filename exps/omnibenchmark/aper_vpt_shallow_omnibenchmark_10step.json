@@ -1,0 +1,31 @@
+{
+    "prefix": "aper-vpt-shallow-omnibenchmark-10step",
+    "dataset": "omnibenchmark",
+    "memory_size": 0,
+    "memory_per_class": 0,
+    "fixed_memory": false,
+    "shuffle": true,
+    "init_cls": 30,
+    "increment": 30,
+    "model_name": "aper_vpt",
+    "weight_decay": 0.0005,
+    "vpt_type": "shallow",
+    "prompt_token_num": 5,
+    "ffn_num": 64,
+    "optimizer": "sgd",
+    "min_lr": 0,
+    "device": [
+        "0"
+    ],
+    "seed": [
+        1993
+    ],
+    "tuned_epoch": 20,
+    "init_lr": 0.01,
+    "batch_size": 48,
+    "backbone_type": "pretrained_vit_b16_224_in21k_vpt",
+    "swanlab": true,
+    "swanlab_project": "SPIE",
+    "swanlab_mode": "online",
+    "omnibenchmark_root": "./data/omnibenchmark"
+}

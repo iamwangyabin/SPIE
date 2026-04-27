@@ -10,7 +10,7 @@ This script is intentionally a companion of tools/spie_ablation.py:
 
 Recommended use:
 python tools/spie_proto_activation_router_ablation.py \
-  --config exps/spie/xxx.json \
+  --config exps/domainnet/official/spie.json \
   --checkpoint logs/.../checkpoints/task_9.pkl \
   --device 0 \
   --output-json logs/.../proto_router_task9.json

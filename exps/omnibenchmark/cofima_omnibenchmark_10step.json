@@ -1,0 +1,35 @@
+{
+    "prefix": "cofima-omnibenchmark-10step",
+    "dataset": "omnibenchmark",
+    "memory_size": 0,
+    "memory_per_class": 0,
+    "fixed_memory": false,
+    "shuffle": true,
+    "init_cls": 30,
+    "increment": 30,
+    "model_name": "cofima",
+    "model_postfix": "50e",
+    "backbone_type": "vit_base_patch16_224",
+    "device": [
+        "0"
+    ],
+    "seed": [
+        1993
+    ],
+    "swanlab": true,
+    "swanlab_project": "SPIE",
+    "swanlab_mode": "online",
+    "lrate": 0.01,
+    "weight_decay": 0.0005,
+    "lrate_decay": 0.1,
+    "batch_size": 64,
+    "epochs": 50,
+    "ca_epochs": 3,
+    "ca_with_logit_norm": 0.1,
+    "milestones": [
+        40
+    ],
+    "fisher_weighting": true,
+    "wt_lambda": 0.4,
+    "omnibenchmark_root": "./data/omnibenchmark"
+}

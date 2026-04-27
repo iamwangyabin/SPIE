@@ -14,18 +14,18 @@ run_config() {
 
 case "${STEP}" in
     10)
-        run_config "exps/spie_inr_10step.json" "bash-inr-10step"
+        run_config "exps/imagenetr/spie_inr_10step.json" "bash-inr-10step"
         ;;
     20)
-        run_config "exps/spie_inr_20step.json" "bash-inr-20step"
+        run_config "exps/imagenetr/spie_inr_20step.json" "bash-inr-20step"
         ;;
     50)
-        run_config "exps/spie_inr_50step.json" "bash-inr-50step"
+        run_config "exps/imagenetr/spie_inr_50step.json" "bash-inr-50step"
         ;;
     all)
-        run_config "exps/spie_inr_10step.json" "bash-inr-10step"
-        run_config "exps/spie_inr_20step.json" "bash-inr-20step"
-        run_config "exps/spie_inr_50step.json" "bash-inr-50step"
+        run_config "exps/imagenetr/spie_inr_10step.json" "bash-inr-10step"
+        run_config "exps/imagenetr/spie_inr_20step.json" "bash-inr-20step"
+        run_config "exps/imagenetr/spie_inr_50step.json" "bash-inr-50step"
         ;;
     *)
         echo "Usage: $0 [10|20|50|all]" >&2

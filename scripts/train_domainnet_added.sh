@@ -22,8 +22,8 @@ run_config() {
 run_pair() {
     local stem="$1"
     local note_prefix="$2"
-    run_config "exps/${stem}_10step.json" "${note_prefix}-10step"
-    run_config "exps/${stem}_20step.json" "${note_prefix}-20step"
+    run_config "exps/domainnet/${stem}_10step.json" "${note_prefix}-10step"
+    run_config "exps/domainnet/${stem}_20step.json" "${note_prefix}-20step"
 }
 
 run_l2p() {

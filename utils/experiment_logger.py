@@ -109,6 +109,8 @@ class ExperimentLogger:
         self._swanlab.log(_to_builtin(metrics))
 
     def log_train_history(self, task_id: int, train_history: Iterable[Dict[str, Any]]) -> None:
+        if not self.enabled:
+            return
         for item in train_history:
             global_epoch = task_id * item["total_epochs"] + item["epoch"]
             payload = {}
@@ -119,6 +121,8 @@ class ExperimentLogger:
             self._swanlab.log(_to_builtin(payload), step=global_epoch)
 
     def log_extra_history(self, task_id: int, extra_history: Iterable[Dict[str, Any]]) -> None:
+        if not self.enabled:
+            return
         for item in extra_history:
             stage = item["stage"]
             total_epochs = item["total_epochs"]
@@ -138,6 +142,8 @@ class ExperimentLogger:
         avg_cnn: Optional[float] = None,
         avg_nme: Optional[float] = None,
     ) -> None:
+        if not self.enabled:
+            return
         payload = {}
         payload.update(self._flatten_eval_metrics("cnn", cnn_accy))
         if avg_cnn is not None:
