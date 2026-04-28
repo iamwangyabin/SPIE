@@ -1,0 +1,39 @@
+{
+    "prefix": "official-ssiat-cifar100-10step",
+    "dataset": "cifar224",
+    "memory_size": 0,
+    "memory_per_class": 0,
+    "fixed_memory": false,
+    "shuffle": true,
+    "ssca": true,
+    "ca": true,
+    "init_cls": 10,
+    "increment": 10,
+    "model_name": "ssiat",
+    "backbone_type": "pretrained_vit_b16_224_in21k_adapter",
+    "device": [
+        "0"
+    ],
+    "seed": [
+        1993,
+        1996,
+        1997
+    ],
+    "swanlab": true,
+    "swanlab_project": "SPIE",
+    "swanlab_mode": "online",
+    "ssiat_official_seed_behavior": true,
+    "init_epochs": 20,
+    "inc_epochs": 10,
+    "ca_epochs": 5,
+    "init_lr": 0.01,
+    "batch_size": 48,
+    "num_workers": 8,
+    "eval_workers": 8,
+    "weight_decay": 0.0005,
+    "min_lr": 0.0,
+    "ffn_num": 64,
+    "optimizer": "sgd",
+    "scale": 20.0,
+    "margin": 0.0
+}

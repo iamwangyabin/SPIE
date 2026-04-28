@@ -1,0 +1,32 @@
+{
+    "prefix": "official-slca-imagenetr-10step",
+    "dataset": "imagenetr",
+    "memory_size": 0,
+    "memory_per_class": 0,
+    "fixed_memory": false,
+    "shuffle": true,
+    "init_cls": 20,
+    "increment": 20,
+    "model_name": "slca",
+    "model_postfix": "50e",
+    "backbone_type": "vit_base_patch16_224",
+    "device": [
+        "0"
+    ],
+    "seed": [
+        1993
+    ],
+    "swanlab": true,
+    "swanlab_project": "SPIE",
+    "swanlab_mode": "online",
+    "lrate": 0.01,
+    "weight_decay": 0.0005,
+    "lrate_decay": 0.1,
+    "batch_size": 64,
+    "epochs": 5,
+    "ca_epochs": 3,
+    "ca_with_logit_norm": 0.1,
+    "milestones": [
+        40
+    ]
+}

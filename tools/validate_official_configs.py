@@ -7,6 +7,9 @@ from pathlib import Path
 DATASETS = {
     "omnibenchmark": (30, 30),
     "domainnet": (20, 20),
+    "imagenetr": (20, 20),
+    "cifar224": (10, 10),
+    "cub": (20, 20),
 }
 
 METHODS = {
