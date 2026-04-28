@@ -331,10 +331,10 @@ def load_config(path):
         return json.load(handle)
 
 
-def default_official_paths():
+def default_config_paths():
     paths = []
     for dataset in DATASETS:
-        paths.extend((Path("exps") / dataset / "official").glob("*.json"))
+        paths.extend((Path("exps") / dataset).glob("*.json"))
     return sorted(paths)
 
 
@@ -363,7 +363,7 @@ def validate(path):
 
     method = cfg.get("model_name")
     if method not in METHODS:
-        errors.append(f"unsupported official method: {method}")
+        errors.append(f"unsupported comparison method: {method}")
     else:
         missing_method = sorted(METHOD_REQUIRED[method] - cfg.keys())
         if missing_method:
@@ -371,7 +371,7 @@ def validate(path):
 
     device = cfg.get("device")
     if device != ["0"]:
-        errors.append(f"official configs should use device ['0']; scripts select physical GPU, got {device}")
+        errors.append(f"comparison configs should use device ['0']; scripts select physical GPU, got {device}")
 
     if method == "aper":
         backbone = str(cfg.get("backbone_type", "")).lower()
@@ -384,11 +384,11 @@ def validate(path):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Validate official experiment configs before long queue runs.")
+    parser = argparse.ArgumentParser(description="Validate comparison experiment configs before long queue runs.")
     parser.add_argument(
         "configs",
         nargs="*",
-        help="Config files to validate. Defaults to exps/{omnibenchmark,domainnet}/official/*.json.",
+        help="Config files to validate. Defaults to exps/<dataset>/*.json for the comparison datasets.",
     )
     parser.add_argument("--require-complete", action="store_true", help="Require all method/dataset combinations.")
     args = parser.parse_args()
@@ -396,7 +396,7 @@ def main():
     if args.configs:
         paths = [Path(item) for item in args.configs]
     else:
-        paths = default_official_paths()
+        paths = default_config_paths()
 
     if not paths:
         raise SystemExit("No configs found.")
@@ -428,7 +428,7 @@ def main():
     if failures:
         raise SystemExit("\n".join(failures))
 
-    print(f"Validated {len(paths)} official config(s).")
+    print(f"Validated {len(paths)} comparison config(s).")
 
 
 if __name__ == "__main__":

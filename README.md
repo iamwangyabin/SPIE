@@ -54,7 +54,7 @@ pip install torchvision timm numpy scipy pillow tqdm swanlab
 
 ## 快速开始
 
-默认会运行 `exps/tuna_cifar.json`：
+默认会运行 `exps/cifar224/tuna.json`：
 
 ```bash
 python main.py
@@ -63,25 +63,23 @@ python main.py
 指定配置运行：
 
 ```bash
-python main.py --config ./exps/spie_cifar_10step.json
-python main.py --config ./exps/spie_inr_10step.json
-python main.py --config ./exps/vpt_nsp2pp_imgr_official.json
+python main.py --config ./exps/cifar224/spie.json
+python main.py --config ./exps/imagenetr/spie.json
+python main.py --config ./exps/domainnet/spie.json
 ```
 
 给本次实验追加备注：
 
 ```bash
-python main.py --config ./exps/spie_cifar_10step.json --note debug
+python main.py --config ./exps/cifar224/spie.json --note debug
 ```
 
 也可以直接使用仓库里的脚本：
 
 ```bash
-bash scripts/train_spie_cifar.sh
-bash scripts/train_spie_inr.sh
-bash scripts/train_tuna_cifar.sh
-bash scripts/train_domainnet.sh all
-bash scripts/train_domainnet_added.sh all
+bash scripts/train_official_imagenetr_cifar_cub_10step_gpu0.sh
+bash scripts/train_official_omni_domainnet_gpu0.sh
+bash scripts/train_spie_lowrank4.sh
 ```
 
 ## 运行前先检查的两件事
@@ -124,7 +122,7 @@ bash scripts/train_domainnet_added.sh all
 
 ## 配置文件说明
 
-实验通过 `exps/*.json` 管理。典型配置项包括：
+实验通过 `exps/<dataset>/*.json` 管理。历史配置已归档到 `exps/legacy/`，SPIE lowrank 消融配置放在 `exps/ablations/spie_lowrank/`。典型配置项包括：
 
 - `prefix`：实验名前缀
 - `dataset`：数据集名称
@@ -234,12 +232,12 @@ data/
 
 如果你只是想确认仓库能跑起来，建议先从这些配置开始：
 
-- `exps/tuna_cifar.json`
-- `exps/spie_cifar_10step.json`
-- `exps/spie_inr_10step.json`
-- `exps/vpt_nsp2pp_imgr_official.json`
+- `exps/cifar224/tuna.json`
+- `exps/cifar224/spie.json`
+- `exps/imagenetr/spie.json`
+- `exps/domainnet/spie.json`
 
-其中 `main.py` 默认指向的是 `exps/tuna_cifar.json`。
+其中 `main.py` 默认指向的是 `exps/cifar224/tuna.json`。
 
 ## 二次开发建议
 
@@ -248,7 +246,7 @@ data/
 1. 在 `models/` 新增一个 Learner。
 2. 在 [utils/factory.py](/Users/wangyabin/Documents/GitHub/SPIE/utils/factory.py) 注册新的 `model_name`。
 3. 复用现有的 `DataManager`、训练器和日志流程。
-4. 新增一份 `exps/*.json` 配置做实验入口。
+4. 新增一份 `exps/<dataset>/*.json` 配置做实验入口。
 
 如果你的方法仍然基于 ViT + 参数高效微调，优先复用 `backbone/` 和 `utils/inc_net.py` 会省很多时间。
 

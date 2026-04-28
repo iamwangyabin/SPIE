@@ -1,5 +1,5 @@
 {
-    "prefix": "reproduce",
+    "prefix": "official-ranpac-cifar100-10step",
     "dataset": "cifar224",
     "memory_size": 0,
     "memory_per_class": 0,

@@ -25,22 +25,22 @@ METHODS = [
 
 TARGETS = {
     "imagenetr": {
-        "config_dir": Path("exps/imagenetr"),
-        "output_dir": Path("exps/imagenetr/official"),
+        "config_dirs": [Path("exps/imagenetr"), Path("exps/legacy/imagenetr")],
+        "output_dir": Path("exps/imagenetr"),
         "prefix_dataset": "imagenetr",
         "init_cls": 20,
         "increment": 20,
     },
     "cifar224": {
-        "config_dir": Path("exps/cifar224"),
-        "output_dir": Path("exps/cifar224/official"),
+        "config_dirs": [Path("exps/cifar224"), Path("exps/legacy/cifar224")],
+        "output_dir": Path("exps/cifar224"),
         "prefix_dataset": "cifar100",
         "init_cls": 10,
         "increment": 10,
     },
     "cub": {
-        "config_dir": Path("exps/cub"),
-        "output_dir": Path("exps/cub/official"),
+        "config_dirs": [Path("exps/cub"), Path("exps/legacy/cub")],
+        "output_dir": Path("exps/cub"),
         "prefix_dataset": "cub",
         "init_cls": 20,
         "increment": 20,
@@ -49,9 +49,9 @@ TARGETS = {
 
 
 FALLBACK_SOURCES = [
-    Path("exps/imagenetr/generated"),
-    Path("exps/omnibenchmark/official"),
-    Path("exps/domainnet/official"),
+    Path("exps/legacy/imagenetr/generated"),
+    Path("exps/omnibenchmark"),
+    Path("exps/domainnet"),
 ]
 
 
@@ -77,16 +77,20 @@ def iter_direct_configs(config_dir):
             continue
 
 
-def find_same_dataset_source(target, method):
-    config_dir = TARGETS[target]["config_dir"]
+def find_same_dataset_source(target, method, skip_path=None):
+    config_dirs = TARGETS[target]["config_dirs"]
     init_cls = TARGETS[target]["init_cls"]
     increment = TARGETS[target]["increment"]
 
-    method_configs = [
-        (path, cfg)
-        for path, cfg in iter_direct_configs(config_dir)
-        if cfg.get("model_name") == method and cfg.get("dataset") == target
-    ]
+    method_configs = []
+    for config_dir in config_dirs:
+        method_configs.extend(
+            (path, cfg)
+            for path, cfg in iter_direct_configs(config_dir)
+            if cfg.get("model_name") == method
+            and cfg.get("dataset") == target
+            and path != skip_path
+        )
     for path, cfg in method_configs:
         if cfg.get("init_cls") == init_cls and cfg.get("increment") == increment:
             return path, cfg
@@ -150,7 +154,7 @@ def build_config(target, method, overwrite=False):
     if output_path.exists() and not overwrite:
         return output_path, None, "exists"
 
-    source_path, source_cfg = find_same_dataset_source(target, method)
+    source_path, source_cfg = find_same_dataset_source(target, method, skip_path=output_path if overwrite else None)
     if source_cfg is None:
         source_path, source_cfg = find_fallback_source(method)
     if source_cfg is None:

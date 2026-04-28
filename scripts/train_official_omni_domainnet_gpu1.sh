@@ -6,14 +6,14 @@ PYTHON_BIN="${PYTHON_BIN:-python}"
 export CUDA_VISIBLE_DEVICES=1
 
 CONFIGS=(
-    "exps/domainnet/official/spie.json"
-    "exps/omnibenchmark/official/l2p.json"
-    "exps/domainnet/official/acil.json"
-    "exps/omnibenchmark/official/fecam.json"
-    "exps/domainnet/official/mos.json"
-    "exps/omnibenchmark/official/min.json"
-    "exps/domainnet/official/aper.json"
-    "exps/omnibenchmark/official/ssiat.json"
+    "exps/domainnet/spie.json"
+    "exps/omnibenchmark/l2p.json"
+    "exps/domainnet/acil.json"
+    "exps/omnibenchmark/fecam.json"
+    "exps/domainnet/mos.json"
+    "exps/omnibenchmark/min.json"
+    "exps/domainnet/aper.json"
+    "exps/omnibenchmark/ssiat.json"
 )
 
 cd "${ROOT_DIR}"

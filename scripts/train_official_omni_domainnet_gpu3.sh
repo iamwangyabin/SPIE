@@ -6,13 +6,13 @@ PYTHON_BIN="${PYTHON_BIN:-python}"
 export CUDA_VISIBLE_DEVICES=3
 
 CONFIGS=(
-    "exps/domainnet/official/tuna.json"
-    "exps/omnibenchmark/official/dualprompt.json"
-    "exps/domainnet/official/slca.json"
-    "exps/omnibenchmark/official/coda_prompt.json"
-    "exps/domainnet/official/ranpac.json"
-    "exps/omnibenchmark/official/ease.json"
-    "exps/domainnet/official/cofima.json"
+    "exps/domainnet/tuna.json"
+    "exps/omnibenchmark/dualprompt.json"
+    "exps/domainnet/slca.json"
+    "exps/omnibenchmark/coda_prompt.json"
+    "exps/domainnet/ranpac.json"
+    "exps/omnibenchmark/ease.json"
+    "exps/domainnet/cofima.json"
 )
 
 cd "${ROOT_DIR}"

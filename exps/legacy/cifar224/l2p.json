@@ -1,5 +1,5 @@
 {
-    "prefix": "official-l2p-cifar100-10step",
+    "prefix": " ",
     "dataset": "cifar224",
     "memory_size": 0,
     "memory_per_class": 0,

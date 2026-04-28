@@ -1,5 +1,5 @@
 {
-    "prefix": "official-fecam-cifar100-10step",
+    "prefix": "reproduce",
     "dataset": "cifar224",
     "memory_size": 0,
     "memory_per_class": 0,
@@ -7,7 +7,7 @@
     "shuffle": true,
     "init_cls": 10,
     "increment": 10,
-    "model_name": "fecam",
+    "model_name": "ranpac",
     "backbone_type": "pretrained_vit_b16_224_adapter",
     "device": [
         "0"
@@ -18,6 +18,7 @@
     "swanlab": true,
     "swanlab_project": "SPIE",
     "swanlab_mode": "online",
+    "use_simplecil": false,
     "tuned_epoch": 20,
     "init_lr": 0.01,
     "batch_size": 48,
@@ -26,5 +27,7 @@
     "ffn_num": 64,
     "optimizer": "sgd",
     "vpt_type": "shallow",
-    "prompt_token_num": 5
+    "prompt_token_num": 5,
+    "use_RP": true,
+    "M": 10000
 }

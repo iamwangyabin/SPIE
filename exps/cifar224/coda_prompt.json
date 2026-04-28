@@ -1,10 +1,10 @@
 {
-    "prefix": " ",
+    "prefix": "official-coda_prompt-cifar100-10step",
     "dataset": "cifar224",
     "memory_size": 0,
     "memory_per_class": 0,
     "fixed_memory": false,
-    "shuffle": false,
+    "shuffle": true,
     "init_cls": 10,
     "increment": 10,
     "model_name": "coda_prompt",
@@ -13,7 +13,7 @@
         "0"
     ],
     "seed": [
-        0
+        1993
     ],
     "swanlab": true,
     "swanlab_project": "SPIE",

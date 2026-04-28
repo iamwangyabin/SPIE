@@ -7,17 +7,17 @@ export CUDA_VISIBLE_DEVICES=1
 NOTE="${NOTE:-official-imagenetr-cifar-cub-10step-gpu1}"
 
 CONFIGS=(
-    "exps/cifar224/official/spie.json"
-    "exps/cub/official/l2p.json"
-    "exps/imagenetr/official/fecam.json"
-    "exps/cifar224/official/mos.json"
-    "exps/cub/official/min.json"
-    "exps/imagenetr/official/ssiat.json"
-    "exps/cifar224/official/tuna.json"
-    "exps/cub/official/dualprompt.json"
-    "exps/imagenetr/official/coda_prompt.json"
-    "exps/cifar224/official/ranpac.json"
-    "exps/cub/official/ease.json"
+    "exps/cifar224/spie.json"
+    "exps/cub/l2p.json"
+    "exps/imagenetr/fecam.json"
+    "exps/cifar224/mos.json"
+    "exps/cub/min.json"
+    "exps/imagenetr/ssiat.json"
+    "exps/cifar224/tuna.json"
+    "exps/cub/dualprompt.json"
+    "exps/imagenetr/coda_prompt.json"
+    "exps/cifar224/ranpac.json"
+    "exps/cub/ease.json"
 )
 
 cd "${ROOT_DIR}"

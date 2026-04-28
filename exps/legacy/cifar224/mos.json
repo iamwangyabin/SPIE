@@ -1,12 +1,12 @@
 {
-    "prefix": "official-mos-cifar100-10step",
+    "prefix": " ",
     "dataset": "cifar224",
     "memory_size": 0,
     "memory_per_class": 0,
     "fixed_memory": false,
     "shuffle": true,
-    "init_cls": 10,
-    "increment": 10,
+    "init_cls": 5,
+    "increment": 5,
     "model_name": "mos",
     "backbone_type": "vit_base_patch16_224_mos",
     "device": [
