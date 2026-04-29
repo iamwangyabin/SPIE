@@ -28,8 +28,13 @@ fi
 
 cd "${ROOT_DIR}"
 
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Waiting ${DELAY_SECONDS}s before uploading logs."
+run_upload() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting upload: tools/upload_logs_to_modelscope.py ${ARGS[*]}"
+    "${PYTHON_BIN}" tools/upload_logs_to_modelscope.py "${ARGS[@]}"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Upload job finished."
+}
+
+run_upload
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Waiting ${DELAY_SECONDS}s before uploading logs again."
 sleep "${DELAY_SECONDS}"
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting upload: tools/upload_logs_to_modelscope.py ${ARGS[*]}"
-"${PYTHON_BIN}" tools/upload_logs_to_modelscope.py "${ARGS[@]}"
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Upload job finished."
+run_upload
