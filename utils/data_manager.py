@@ -244,7 +244,7 @@ def _get_idata(dataset_name, args=None):
     elif name == "imagenetr":
         return iImageNetR(args)
     elif name == "imageneta":
-        return iImageNetA()
+        return iImageNetA(args)
     elif name in {"domainnet", "sdomainet"}:
         return iDomainNet(args)
     elif name == "officehome":

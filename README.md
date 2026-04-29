@@ -231,6 +231,28 @@ data/
 - `checkpoints/task_*.pkl`：每个 task 的 checkpoint
 - SwanLab 对应的在线或本地实验记录（如果启用）
 
+## 上传到 ModelScope
+
+`tools/upload_logs_to_modelscope.py` 默认扫描 `logs/` 下的所有 run 目录，根据 `train.log` 推断总 task 数，并检查 `checkpoints/task_*.pkl` 是否齐全。checkpoint 不足的目录会被视为中断或未结束，直接跳过。远端提交成功后，本地已上传的 run 目录会被删除；如果需要保留本地目录，可以加 `--keep-local`。
+
+直接运行时，脚本会把每个已完成 run 上传到远端同名目录：
+
+```text
+<run_name>
+```
+
+也可以手动指定某次已完成实验：
+
+```bash
+python tools/upload_logs_to_modelscope.py --logs-dir logs/<run_name>
+```
+
+如果确实需要自定义远端目录，再显式传入：
+
+```bash
+python tools/upload_logs_to_modelscope.py --logs-dir logs/<run_name> --path-in-repo <custom_name>
+```
+
 ## 一些现成配置
 
 如果你只是想确认仓库能跑起来，建议先从这些配置开始：

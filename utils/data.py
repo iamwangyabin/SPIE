@@ -445,13 +445,20 @@ class iNICOPP(iData):
 
 
 class iImageNetA(iData):
-    use_path = True
-    
-    train_trsf = build_transform(True, None)
-    test_trsf = build_transform(False, None)
-    common_trsf = [    ]
+    def __init__(self, args=None):
+        super().__init__()
+        self.args = args or {}
+        self.use_path = True
 
-    class_order = np.arange(200).tolist()
+        if self.args.get("model_name") == "coda_prompt":
+            self.train_trsf = build_transform_coda_prompt(True, self.args)
+            self.test_trsf = build_transform_coda_prompt(False, self.args)
+        else:
+            self.train_trsf = build_transform(True, self.args)
+            self.test_trsf = build_transform(False, self.args)
+        self.common_trsf = []
+
+        self.class_order = np.arange(200).tolist()
 
     def download_data(self):
         # assert 0, "You should specify the folder of your dataset"
