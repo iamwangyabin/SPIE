@@ -201,11 +201,14 @@ data/
 data/
 └── food-101/
     ├── images/
-    └── meta/
-        ├── classes.txt
-        ├── train.txt
-        └── test.txt
+    ├── classes.txt
+    ├── train.txt
+    ├── test.txt
+    ├── train.json
+    └── test.json
 ```
+
+同时兼容 `meta/train.txt`、`meta/test.txt`、`meta/train.json`、`meta/test.json`。
 
 当前仓库只自带了 DomainNet 的列表文件：
 

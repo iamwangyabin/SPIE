@@ -12,6 +12,11 @@ DATASETS = {
     "cub": (20, 20),
 }
 
+TWENTY_STEP_DATASETS = {
+    "cifar224": (5, 5),
+    "cub": (10, 10),
+}
+
 METHODS = {
     "l2p",
     "dualprompt",
@@ -331,14 +336,18 @@ def load_config(path):
         return json.load(handle)
 
 
-def default_config_paths():
+def default_config_paths(include_20step=False):
     paths = []
     for dataset in DATASETS:
-        paths.extend((Path("exps") / dataset).glob("*.json"))
+        dataset_paths = (Path("exps") / dataset).glob("*.json")
+        if include_20step:
+            paths.extend(dataset_paths)
+        else:
+            paths.extend(path for path in dataset_paths if not path.name.endswith("-20step.json"))
     return sorted(paths)
 
 
-def validate(path):
+def validate(path, allow_20step=False):
     cfg = load_config(path)
     errors = []
 
@@ -350,10 +359,17 @@ def validate(path):
     if dataset not in DATASETS:
         errors.append(f"unsupported dataset: {dataset}")
     else:
-        init_cls, increment = DATASETS[dataset]
-        if cfg.get("init_cls") != init_cls or cfg.get("increment") != increment:
+        valid_steps = [DATASETS[dataset]]
+        if allow_20step and dataset in TWENTY_STEP_DATASETS:
+            valid_steps.append(TWENTY_STEP_DATASETS[dataset])
+        current_step = (cfg.get("init_cls"), cfg.get("increment"))
+        if current_step not in valid_steps:
+            valid_step_text = ", ".join(
+                f"init_cls={init_cls}, increment={increment}"
+                for init_cls, increment in valid_steps
+            )
             errors.append(
-                f"{dataset} must use init_cls={init_cls}, increment={increment}; "
+                f"{dataset} must use {valid_step_text}; "
                 f"got {cfg.get('init_cls')}/{cfg.get('increment')}"
             )
         if dataset == "domainnet" and cfg.get("domainnet_protocol") != "official":
@@ -390,13 +406,18 @@ def main():
         nargs="*",
         help="Config files to validate. Defaults to exps/<dataset>/*.json for the comparison datasets.",
     )
+    parser.add_argument(
+        "--allow-20step",
+        action="store_true",
+        help="Also accept CIFAR-100 20-step (5/5) and CUB-200 20-step (10/10) configs.",
+    )
     parser.add_argument("--require-complete", action="store_true", help="Require all method/dataset combinations.")
     args = parser.parse_args()
 
     if args.configs:
         paths = [Path(item) for item in args.configs]
     else:
-        paths = default_config_paths()
+        paths = default_config_paths(include_20step=args.allow_20step)
 
     if not paths:
         raise SystemExit("No configs found.")
@@ -410,7 +431,7 @@ def main():
         try:
             cfg = load_config(path)
             seen.add((cfg.get("model_name"), cfg.get("dataset")))
-            errors = validate(path)
+            errors = validate(path, allow_20step=args.allow_20step)
         except Exception as exc:
             errors = [f"failed to parse or validate: {exc}"]
         for error in errors:
