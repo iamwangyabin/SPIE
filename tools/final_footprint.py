@@ -101,6 +101,10 @@ def ssf_params() -> int:
 
 def covariance_state(c: int, mode: str, rank: int = 0) -> int:
     mode = str(mode).lower()
+    if mode in {"none", "no_replay"}:
+        return 0
+    if mode in {"mean", "mean_only"}:
+        return 0
     if mode == "variance":
         return c * D
     if mode == "diag_lowrank":
@@ -111,6 +115,9 @@ def covariance_state(c: int, mode: str, rank: int = 0) -> int:
 
 
 def class_stats_state(c: int, mode: str, rank: int = 0) -> int:
+    mode = str(mode).lower()
+    if mode in {"none", "no_replay"}:
+        return 0
     return c * D + covariance_state(c, mode, rank)
 
 
@@ -452,6 +459,59 @@ def count_spie(args: dict) -> Footprint:
     )
 
 
+def count_spie_ablation(args: dict) -> Footprint:
+    c, sizes = config_shape(args)
+    t = len(sizes)
+    vera_rank = int(args.get("vera_rank", 256))
+    expert_tokens = int(args.get("expert_tokens", 4))
+    adapter_type = str(args.get("expert_adapter_type", "vera")).lower()
+    if adapter_type == "vera":
+        per_expert_adapter = L * ((vera_rank + H) + (vera_rank + D))
+    elif adapter_type == "lora":
+        expert_lora_rank = int(args.get("expert_lora_rank", 8))
+        per_expert_adapter = L * expert_lora_rank * (D + H + H + D)
+    elif adapter_type == "none":
+        per_expert_adapter = 0
+    else:
+        raise ValueError(f"Unsupported SPIE expert_adapter_type: {adapter_type}")
+
+    disable_experts = bool(args.get("spie_disable_experts", False))
+    expert_adapters = 0 if disable_experts else (t + 1) * per_expert_adapter
+    token_params = 0 if disable_experts else (t + 1) * expert_tokens * D
+    fc_shared = continual_linear(sizes, D, bias=False)
+    expert_heads = 0 if disable_experts else continual_linear(sizes, 2 * D, bias=False)
+    shared_adapter = 0
+    if bool(args.get("use_shared_adapter", False)):
+        shared_rank = int(args.get("shared_lora_rank", 8))
+        shared_adapter = L * shared_rank * (D + H + H + D)
+
+    if bool(args.get("spie_disable_replay", False)) or int(args.get("shared_cls_crct_epochs", 1)) <= 0:
+        state = 0
+    else:
+        cov_mode = default_cov_mode(args, default="diag_lowrank")
+        if cov_mode == "lowrank_covariance":
+            cov_mode = "diag_lowrank"
+        state = class_stats_state(c, cov_mode, int(args.get("ca_lowrank_rank", 16)))
+    backbone = VIT_B_PARAMS
+    return Footprint(
+        method="SPIE-Ablation",
+        dataset=args["dataset"],
+        classes=c,
+        tasks=t,
+        params=backbone + shared_adapter + expert_adapters + token_params + fc_shared + expert_heads,
+        state=state,
+        components={
+            "vit_backbone": backbone,
+            "shared_lora_adapter": shared_adapter,
+            "expert_adapters": expert_adapters,
+            "expert_tokens": token_params,
+            "fc_shared_cls": fc_shared,
+            "expert_heads": expert_heads,
+            "shared_class_stats": state,
+        },
+    )
+
+
 COUNTERS: dict[str, Callable[[dict], Footprint]] = {
     "acil": count_acil,
     "aper": count_aper,
@@ -469,6 +529,7 @@ COUNTERS: dict[str, Callable[[dict], Footprint]] = {
     "ranpac": count_ranpac,
     "slca": count_slca,
     "spie": count_spie,
+    "spie_ablation": count_spie_ablation,
     "ssiat": count_ssiat,
     "tuna": count_tuna,
 }

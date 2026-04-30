@@ -234,9 +234,12 @@ def get_backbone(args, pretrained=False):
             else:
                 raise NotImplementedError("Unknown type {}".format(name))
             return model
-    elif name.endswith("_spie"):
+    elif name.endswith("_spie") or name.endswith("_spie_ablation"):
         ffn_num = 16
-        from backbone import vit_spie
+        if name.endswith("_spie_ablation"):
+            from backbone import vit_spie_ablation as vit_spie_module
+        else:
+            from backbone import vit_spie as vit_spie_module
         from easydict import EasyDict
         tuning_config = EasyDict(
             ffn_adapt=True,
@@ -265,10 +268,22 @@ def get_backbone(args, pretrained=False):
             vera_d_initial=args.get("vera_d_initial", 0.1),
             vera_save_projection=args.get("vera_save_projection", True),
         )
+        if name.endswith("_spie_ablation"):
+            common_kwargs.update(
+                {
+                    "expert_adapter_type": args.get("expert_adapter_type", "vera"),
+                    "expert_lora_rank": args.get("expert_lora_rank", 8),
+                    "expert_lora_alpha": args.get("expert_lora_alpha", 1.0),
+                }
+            )
         if name == "vit_base_patch16_224_spie":
-            model = vit_spie.vit_base_patch16_224_spie(**common_kwargs)
+            model = vit_spie_module.vit_base_patch16_224_spie(**common_kwargs)
         elif name == "vit_base_patch16_224_in21k_spie":
-            model = vit_spie.vit_base_patch16_224_in21k_spie(**common_kwargs)
+            model = vit_spie_module.vit_base_patch16_224_in21k_spie(**common_kwargs)
+        elif name == "vit_base_patch16_224_spie_ablation":
+            model = vit_spie_module.vit_base_patch16_224_spie_ablation(**common_kwargs)
+        elif name == "vit_base_patch16_224_in21k_spie_ablation":
+            model = vit_spie_module.vit_base_patch16_224_in21k_spie_ablation(**common_kwargs)
         else:
             raise NotImplementedError("Unknown type {}".format(name))
         return model

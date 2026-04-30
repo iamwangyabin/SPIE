@@ -34,6 +34,8 @@ def get_model(model_name, args):
         from models.tunamax import Learner
     elif name == "spie":
         from models.spie import Learner
+    elif name == "spie_ablation":
+        from models.spie_ablation import Learner
     elif name == "ka_prompt":
         from models.ka_prompt import Learner
     elif name == "mqmk":
@@ -60,7 +62,7 @@ def get_model(model_name, args):
         raise ValueError(
             "Supported model names are 'aper', 'acil', 'aper_finetune', 'aper_ssf', "
             "'aper_vpt', 'aper_adapter', 'l2p', 'dualprompt', 'coda_prompt', 'ease', 'slca', "
-            "'ranpac', 'fecam', 'cofima', 'tuna', 'tunamax', 'spie', 'ka_prompt', "
+            "'ranpac', 'fecam', 'cofima', 'tuna', 'tunamax', 'spie', 'spie_ablation', 'ka_prompt', "
             "'mqmk', 'onlymax', 'min', 'min_ablation', 'moal', 'mos', 'ssiat', "
             "'consistent_moe_prompt', 'arcl', and 'vpt_nsp2pp'."
         )

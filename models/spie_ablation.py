@@ -1,0 +1,534 @@
+import copy
+import logging
+import math
+
+import numpy as np
+import torch
+import torch.nn.functional as F
+
+from models.spie_ablation_base import Learner as SPIEBaseLearner
+
+
+class Learner(SPIEBaseLearner):
+    """Ablation-only SPiE variant with isolated component and routing switches."""
+
+    _spie_version_name = "SPiE-Ablation"
+
+    def __init__(self, args):
+        super().__init__(args)
+
+        self.posterior_task_temperature = float(args.get("posterior_task_temperature", 1.0))
+        self.posterior_expert_temperature = float(args.get("posterior_expert_temperature", 1.0))
+        self.posterior_shared_temperature = float(args.get("posterior_shared_temperature", 1.0))
+        self.posterior_alpha = float(args.get("posterior_alpha", 0.2))
+        self.posterior_alpha = min(max(self.posterior_alpha, 0.0), 1.0)
+        self.posterior_router = str(args.get("posterior_router", "prototype_activation"))
+        self.spie_eval_fusion_strategy = str(args.get("spie_eval_fusion_strategy", "probability_fusion")).lower()
+        self.spie_eval_variants = args.get("spie_eval_variants", [])
+        if isinstance(self.spie_eval_variants, str):
+            self.spie_eval_variants = [
+                item.strip()
+                for item in self.spie_eval_variants.split(",")
+                if item.strip()
+            ]
+        self.spie_eval_variants = [str(item).lower() for item in self.spie_eval_variants]
+        supported_routers = {"task_logmeanexp", "prototype_activation", "task_max_proto"}
+        if self.posterior_router not in supported_routers:
+            raise ValueError(
+                f"Unknown posterior_router: {self.posterior_router}. "
+                f"Supported routers: {sorted(supported_routers)}"
+            )
+        self._eval_variants = {}
+
+        logging.info(
+            (
+                "SPiE expert branch trains without shared-logit distillation. "
+                "Posterior fusion: posterior_router=%s alpha=%s task_temperature=%s "
+                "expert_temperature=%s shared_temperature=%s eval_strategy=%s."
+            ),
+            self.posterior_router,
+            self.posterior_alpha,
+            self.posterior_task_temperature,
+            self.posterior_expert_temperature,
+            self.posterior_shared_temperature,
+            self.spie_eval_fusion_strategy,
+        )
+
+    def consume_eval_variants(self):
+        payload = copy.deepcopy(self._eval_variants) if self._eval_variants else None
+        self._eval_variants = {}
+        return payload
+
+    def _drop_topk_metrics(self, accy):
+        return {
+            key: value
+            for key, value in accy.items()
+            if key == "top1" or not key.startswith("top")
+        }
+
+    def _train(self, train_loader):
+        backbone = self._network.backbone
+        backbone_module = self._backbone_module()
+
+        backbone.to(self._device)
+        self._network.fc_shared_cls.to(self._device)
+        self._network.expert_heads.to(self._device)
+
+        if self._cur_task == 0:
+            self._train_shared_branch(
+                train_loader=train_loader,
+                epochs=self.task0_shared_epochs,
+                branch_lr=self.task0_shared_lr,
+                stage="task0_shared_branch",
+            )
+        else:
+            self._train_shared_branch(
+                train_loader=train_loader,
+                epochs=self.shared_cls_epochs,
+                branch_lr=self.shared_cls_lr,
+                stage="shared_branch",
+            )
+
+        self._set_shared_lora_requires_grad(False)
+        if not self.spie_disable_replay:
+            self._compute_shared_cls_mean(backbone)
+            if self._cur_task > 0:
+                self._classifier_align_shared_cls()
+
+        if self.spie_disable_experts:
+            return
+
+        if self._cur_task == 0:
+            self._train_current_expert(
+                train_loader=train_loader,
+                epochs=self.task0_expert_epochs,
+                expert_lr=self.task0_expert_lr,
+                stage="task0_expert_local",
+            )
+        else:
+            self._train_current_expert(
+                train_loader=train_loader,
+                epochs=self.incremental_expert_epochs,
+                expert_lr=self.incremental_expert_lr,
+                stage="incremental_expert_local",
+            )
+
+        self._set_shared_lora_requires_grad(False)
+        self._set_current_expert_requires_grad(False)
+        self._set_expert_head_requires_grad(self._cur_task, False)
+        backbone_module.adapter_update()
+
+    def _stable_softmax_np(self, logits):
+        shifted = logits - np.max(logits, axis=1, keepdims=True)
+        exp_logits = np.exp(shifted)
+        return exp_logits / np.clip(exp_logits.sum(axis=1, keepdims=True), a_min=1e-12, a_max=None)
+
+    def _predict_topk_np(self, scores):
+        topk = min(self.topk, scores.shape[1])
+        predicts = np.full((scores.shape[0], self.topk), -1, dtype=np.int64)
+        predicts[:, :topk] = np.argsort(-scores, axis=1)[:, :topk]
+        return predicts
+
+    def _find_last_linear_weight(self, module):
+        last_weight = None
+        for submodule in module.modules():
+            weight = getattr(submodule, "weight", None)
+            if isinstance(weight, torch.Tensor) and weight.ndim == 2:
+                last_weight = weight
+        return last_weight
+
+    def _extract_class_prototype_bank(self):
+        """
+        Extract discriminative class prototypes from the calibrated shared classifier.
+
+        The calibrated shared classifier weights are treated as a class-prototype bank
+        for prototype activation routing.
+        """
+        fc = self._network.fc_shared_cls
+
+        if hasattr(fc, "heads"):
+            weights = []
+            for head in fc.heads:
+                weight = self._find_last_linear_weight(head)
+                if weight is None:
+                    raise RuntimeError(f"Cannot find Linear weight in shared classifier head: {head}")
+                weights.append(weight)
+            class_prototype_bank = torch.cat(weights, dim=0)
+        else:
+            class_prototype_bank = getattr(fc, "weight", None)
+            if class_prototype_bank is None:
+                raise RuntimeError(f"Unsupported fc_shared_cls type for prototype routing: {type(fc)}")
+
+        class_prototype_bank = class_prototype_bank[: self._total_classes]
+        return F.normalize(class_prototype_bank, p=2, dim=1)
+
+    def _compute_prototype_activation(self, shared_features, class_prototype_bank):
+        """Compute activation scores between shared features and class prototypes."""
+        shared_features = F.normalize(shared_features, p=2, dim=1)
+        class_prototype_bank = F.normalize(class_prototype_bank, p=2, dim=1)
+        return shared_features @ class_prototype_bank.T
+
+    def _class_to_task(self, pred_class):
+        """Map global class indices to task indices according to self.task_class_ranges."""
+        pred_task = torch.full_like(pred_class, fill_value=-1)
+
+        for task_id, (start_idx, end_idx) in enumerate(self.task_class_ranges):
+            mask = (pred_class >= start_idx) & (pred_class < end_idx)
+            pred_task[mask] = task_id
+
+        if torch.any(pred_task < 0):
+            bad = pred_class[pred_task < 0][:10].detach().cpu().tolist()
+            raise ValueError(f"Some classes are outside task ranges: {bad}")
+
+        return pred_task
+
+    def _task_posterior_from_prototype_activation(self, shared_features):
+        """Route each sample to the task of its most activated class prototype."""
+        class_prototype_bank = self._extract_class_prototype_bank()
+        class_activation = self._compute_prototype_activation(shared_features, class_prototype_bank)
+        pred_class = torch.argmax(class_activation, dim=1)
+        pred_task = self._class_to_task(pred_class)
+
+        task_route_prob = torch.zeros(
+            shared_features.size(0),
+            len(self.task_class_ranges),
+            device=shared_features.device,
+            dtype=shared_features.dtype,
+        )
+        task_route_prob[
+            torch.arange(shared_features.size(0), device=shared_features.device),
+            pred_task,
+        ] = 1.0
+        return task_route_prob
+
+    def _task_posterior_from_task_max_prototype(self, shared_features):
+        """Each task uses its most activated class prototype as task route score."""
+        task_temperature = max(self.posterior_task_temperature, 1e-6)
+        class_prototype_bank = self._extract_class_prototype_bank()
+        class_activation = self._compute_prototype_activation(shared_features, class_prototype_bank)
+
+        task_route_scores = []
+        for start_idx, end_idx in self.task_class_ranges:
+            block = class_activation[:, start_idx:end_idx] / task_temperature
+            if block.shape[1] == 0:
+                score = torch.full(
+                    (shared_features.size(0),),
+                    -torch.inf,
+                    device=shared_features.device,
+                    dtype=shared_features.dtype,
+                )
+            else:
+                score = torch.max(block, dim=1).values
+            task_route_scores.append(score)
+
+        task_route_scores = torch.stack(task_route_scores, dim=1)
+        return torch.softmax(task_route_scores, dim=1)
+
+    def _task_posterior_from_task_logmeanexp(self, global_class_logits):
+        """
+        Original SPiE task router: aggregate class logits within each task by log-mean-exp.
+        """
+        task_temperature = max(self.posterior_task_temperature, 1e-6)
+        task_route_scores = []
+
+        for start_idx, end_idx in self.task_class_ranges:
+            block = global_class_logits[:, start_idx:end_idx] / task_temperature
+            task_width = max(end_idx - start_idx, 1)
+            score = torch.logsumexp(block, dim=1) - math.log(task_width)
+            task_route_scores.append(score)
+
+        task_route_scores = torch.stack(task_route_scores, dim=1)
+        return torch.softmax(task_route_scores, dim=1)
+
+    def _task_posterior_from_task_logmeanexp_np(self, global_class_logits):
+        global_class_logits_t = torch.from_numpy(global_class_logits).to(self._device, dtype=torch.float32)
+        return (
+            self._task_posterior_from_task_logmeanexp(global_class_logits_t)
+            .detach()
+            .cpu()
+            .numpy()
+            .astype(np.float32)
+        )
+
+    def _task_posterior_from_shared_features_np(self, shared_features, posterior_router):
+        shared_features_t = torch.from_numpy(shared_features).to(self._device, dtype=torch.float32)
+
+        with torch.no_grad():
+            if posterior_router == "prototype_activation":
+                task_route_prob = self._task_posterior_from_prototype_activation(shared_features_t)
+            elif posterior_router == "task_max_proto":
+                task_route_prob = self._task_posterior_from_task_max_prototype(shared_features_t)
+            else:
+                raise ValueError(f"Unsupported feature router: {posterior_router}")
+
+        return task_route_prob.detach().cpu().numpy().astype(np.float32)
+
+    def _class_to_task_np(self, classes):
+        classes = np.asarray(classes)
+        task_ids = np.full(classes.shape, fill_value=-1, dtype=np.int64)
+
+        for task_id, (start_idx, end_idx) in enumerate(self.task_class_ranges):
+            mask = (classes >= start_idx) & (classes < end_idx)
+            task_ids[mask] = task_id
+
+        if np.any(task_ids < 0):
+            bad = classes[task_ids < 0][:10]
+            raise ValueError(f"Some classes are outside task ranges: {bad}")
+
+        return task_ids
+
+    def _collect_eval_logits_np(self, loader):
+        self._network.eval()
+        all_shared_logits, all_targets = [], []
+        num_tasks = len(self.task_class_ranges)
+        expert_logits_chunks = [[] for _ in range(num_tasks)]
+
+        for _, (_, inputs, targets) in enumerate(loader):
+            inputs = inputs.to(self._device)
+
+            with torch.no_grad():
+                shared_logits = self._shared_cls_logits(inputs)
+                expert_logits_map = self._collect_expert_logits(inputs, list(range(num_tasks))) if num_tasks > 0 else {}
+
+            all_shared_logits.append(shared_logits.cpu().numpy().astype(np.float32))
+            all_targets.append(targets.numpy())
+            for task_id in range(num_tasks):
+                expert_logits_chunks[task_id].append(expert_logits_map[task_id].cpu().numpy().astype(np.float32))
+
+        shared_logits_np = np.concatenate(all_shared_logits, axis=0)
+        y_true = np.concatenate(all_targets, axis=0)
+        expert_logits_by_task = [
+            np.concatenate(task_chunks, axis=0) if task_chunks else np.zeros((shared_logits_np.shape[0], 0), dtype=np.float32)
+            for task_chunks in expert_logits_chunks
+        ]
+        return shared_logits_np, expert_logits_by_task, y_true
+
+    def _collect_shared_eval_pack_np(self, loader):
+        self._network.eval()
+        all_global_class_logits, all_shared_features, all_targets = [], [], []
+
+        for _, (_, inputs, targets) in enumerate(loader):
+            inputs = inputs.to(self._device)
+
+            with torch.no_grad():
+                shared_out = self._network.backbone(inputs, adapter_id=-1, train=False)
+                shared_features = shared_out["cls_features"]
+                global_class_logits = self._network.fc_shared_cls(shared_features)["logits"][:, : self._total_classes]
+
+            all_global_class_logits.append(global_class_logits.cpu().numpy().astype(np.float32))
+            all_shared_features.append(shared_features.cpu().numpy().astype(np.float32))
+            all_targets.append(targets.numpy())
+
+        return (
+            np.concatenate(all_global_class_logits, axis=0),
+            np.concatenate(all_shared_features, axis=0),
+            np.concatenate(all_targets, axis=0),
+        )
+
+    def _collect_eval_pack_np(self, loader):
+        self._network.eval()
+        all_global_class_logits, all_shared_features, all_targets = [], [], []
+        num_tasks = len(self.task_class_ranges)
+        expert_logits_chunks = [[] for _ in range(num_tasks)]
+
+        for _, (_, inputs, targets) in enumerate(loader):
+            inputs = inputs.to(self._device)
+
+            with torch.no_grad():
+                shared_out = self._network.backbone(inputs, adapter_id=-1, train=False)
+                shared_features = shared_out["cls_features"]
+                global_class_logits = self._network.fc_shared_cls(shared_features)["logits"][:, : self._total_classes]
+                expert_logits_map = self._collect_expert_logits(inputs, list(range(num_tasks))) if num_tasks > 0 else {}
+
+            all_global_class_logits.append(global_class_logits.cpu().numpy().astype(np.float32))
+            all_shared_features.append(shared_features.cpu().numpy().astype(np.float32))
+            all_targets.append(targets.numpy())
+            for task_id in range(num_tasks):
+                expert_logits_chunks[task_id].append(expert_logits_map[task_id].cpu().numpy().astype(np.float32))
+
+        global_class_logits_np = np.concatenate(all_global_class_logits, axis=0)
+        shared_features_np = np.concatenate(all_shared_features, axis=0)
+        y_true = np.concatenate(all_targets, axis=0)
+        expert_logits_by_task = [
+            np.concatenate(task_chunks, axis=0)
+            if task_chunks
+            else np.zeros((global_class_logits_np.shape[0], 0), dtype=np.float32)
+            for task_chunks in expert_logits_chunks
+        ]
+        return global_class_logits_np, shared_features_np, expert_logits_by_task, y_true
+
+    def _posterior_fusion_probs_np(
+        self,
+        global_class_logits,
+        expert_logits_by_task,
+        shared_features=None,
+        posterior_router=None,
+        return_task_route_prob=False,
+    ):
+        shared_temperature = max(self.posterior_shared_temperature, 1e-6)
+        expert_temperature = max(self.posterior_expert_temperature, 1e-6)
+        posterior_router = posterior_router or self.posterior_router
+
+        global_class_prob = self._stable_softmax_np(global_class_logits / shared_temperature).astype(np.float32)
+
+        if not self.task_class_ranges:
+            if return_task_route_prob:
+                return global_class_prob, None, None
+            return global_class_prob, None
+
+        if posterior_router == "task_logmeanexp":
+            task_route_prob = self._task_posterior_from_task_logmeanexp_np(global_class_logits)
+        elif posterior_router in {"prototype_activation", "task_max_proto"}:
+            if shared_features is None:
+                raise ValueError(
+                    f"posterior_router={posterior_router} requires shared_features. "
+                    "Use _collect_eval_pack_np for prototype-based posterior fusion."
+                )
+            task_route_prob = self._task_posterior_from_shared_features_np(shared_features, posterior_router)
+        else:
+            raise ValueError(f"Unknown posterior_router: {posterior_router}")
+
+        routed_expert_prob = np.zeros_like(global_class_prob, dtype=np.float32)
+        for task_id, (start_idx, end_idx) in enumerate(self.task_class_ranges):
+            expert_logits = expert_logits_by_task[task_id]
+            if expert_logits.shape[1] == 0:
+                continue
+            local_prob = self._stable_softmax_np(expert_logits / expert_temperature).astype(np.float32)
+            routed_expert_prob[:, start_idx:end_idx] = task_route_prob[:, task_id : task_id + 1] * local_prob
+
+        # Legacy alpha fusion is no longer used by SPiE eval.
+        # p_final = self.posterior_alpha * global_class_prob + (1.0 - self.posterior_alpha) * routed_expert_prob
+        if return_task_route_prob:
+            return routed_expert_prob, None, task_route_prob
+        return routed_expert_prob, None
+
+    def _uniform_probability_fusion_np(self, global_class_logits, expert_logits_by_task):
+        del global_class_logits
+        expert_temperature = max(self.posterior_expert_temperature, 1e-6)
+        num_tasks = len(self.task_class_ranges)
+        if num_tasks == 0:
+            raise ValueError("Uniform fusion requires at least one task.")
+
+        fused_prob = np.zeros((expert_logits_by_task[0].shape[0], self._total_classes), dtype=np.float32)
+        task_weight = 1.0 / float(num_tasks)
+        for task_id, (start_idx, end_idx) in enumerate(self.task_class_ranges):
+            expert_logits = expert_logits_by_task[task_id]
+            local_prob = self._stable_softmax_np(expert_logits / expert_temperature).astype(np.float32)
+            fused_prob[:, start_idx:end_idx] = task_weight * local_prob
+        return fused_prob
+
+    def _global_expert_logits_np(self, global_class_logits, expert_logits_by_task):
+        expert_temperature = max(self.posterior_expert_temperature, 1e-6)
+        expert_logits_global = np.full_like(global_class_logits, -1e9, dtype=np.float32)
+        for task_id, (start_idx, end_idx) in enumerate(self.task_class_ranges):
+            expert_logits_global[:, start_idx:end_idx] = (
+                expert_logits_by_task[task_id] / expert_temperature
+            ).astype(np.float32)
+        return expert_logits_global
+
+    def _logit_weighted_fusion_np(self, global_class_logits, shared_features, expert_logits_by_task):
+        expert_logits_global = self._global_expert_logits_np(global_class_logits, expert_logits_by_task)
+        task_route_prob = self._task_posterior_from_shared_features_np(shared_features, "task_max_proto")
+
+        weighted_logits = np.full_like(global_class_logits, -1e9, dtype=np.float32)
+        for task_id, (start_idx, end_idx) in enumerate(self.task_class_ranges):
+            log_q = np.log(np.clip(task_route_prob[:, task_id : task_id + 1], a_min=1e-12, a_max=None))
+            weighted_logits[:, start_idx:end_idx] = expert_logits_global[:, start_idx:end_idx] + log_q
+        return self._stable_softmax_np(weighted_logits).astype(np.float32)
+
+    def _fusion_scores_np(self, strategy, global_class_logits, shared_features, expert_logits_by_task):
+        strategy = str(strategy).lower()
+        aliases = {
+            "full": "probability_fusion",
+            "soft_posterior": "probability_fusion",
+            "probability": "probability_fusion",
+            "hard": "hard_argmax",
+            "hard_routing": "hard_argmax",
+            "logit_concat": "logit_concat_softmax",
+            "uniform": "uniform_q",
+            "uniform_probability": "uniform_q",
+            "shared": "shared_only",
+        }
+        strategy = aliases.get(strategy, strategy)
+
+        if strategy == "shared_only":
+            shared_temperature = max(self.posterior_shared_temperature, 1e-6)
+            return self._stable_softmax_np(global_class_logits / shared_temperature).astype(np.float32)
+        if strategy == "probability_fusion":
+            scores, _ = self._posterior_fusion_probs_np(
+                global_class_logits,
+                expert_logits_by_task,
+                shared_features=shared_features,
+                posterior_router="task_max_proto",
+            )
+            return scores
+        if strategy == "hard_argmax":
+            scores, _ = self._posterior_fusion_probs_np(
+                global_class_logits,
+                expert_logits_by_task,
+                shared_features=shared_features,
+                posterior_router="prototype_activation",
+            )
+            return scores
+        if strategy == "logit_concat_softmax":
+            return self._stable_softmax_np(
+                self._global_expert_logits_np(global_class_logits, expert_logits_by_task)
+            ).astype(np.float32)
+        if strategy == "logit_weighted":
+            return self._logit_weighted_fusion_np(global_class_logits, shared_features, expert_logits_by_task)
+        if strategy == "uniform_q":
+            return self._uniform_probability_fusion_np(global_class_logits, expert_logits_by_task)
+
+        raise ValueError(
+            f"Unknown spie_eval_fusion_strategy={strategy}. Supported: "
+            "shared_only, hard_argmax, logit_concat_softmax, logit_weighted, "
+            "probability_fusion, uniform_q."
+        )
+
+    def eval_task(self):
+        if self.spie_disable_experts:
+            global_class_logits_np, shared_features_np, y_true = self._collect_shared_eval_pack_np(self.test_loader)
+            del shared_features_np
+            shared_prob = self._fusion_scores_np("shared_only", global_class_logits_np, None, [])
+            shared_accy = self._drop_topk_metrics(self._evaluate(self._predict_topk_np(shared_prob), y_true))
+            self._eval_variants = {}
+            return shared_accy, shared_accy
+
+        global_class_logits_np, shared_features_np, expert_logits_by_task, y_true = self._collect_eval_pack_np(
+            self.test_loader
+        )
+
+        main_scores = self._fusion_scores_np(
+            self.spie_eval_fusion_strategy,
+            global_class_logits_np,
+            shared_features_np,
+            expert_logits_by_task,
+        )
+        shared_scores = self._fusion_scores_np("shared_only", global_class_logits_np, shared_features_np, expert_logits_by_task)
+
+        main_accy = self._drop_topk_metrics(self._evaluate(self._predict_topk_np(main_scores), y_true))
+        shared_accy = self._drop_topk_metrics(self._evaluate(self._predict_topk_np(shared_scores), y_true))
+        self._eval_variants = {}
+        for strategy in self.spie_eval_variants:
+            variant_scores = self._fusion_scores_np(
+                strategy,
+                global_class_logits_np,
+                shared_features_np,
+                expert_logits_by_task,
+            )
+            self._eval_variants[strategy] = self._drop_topk_metrics(
+                self._evaluate(self._predict_topk_np(variant_scores), y_true)
+            )
+
+        logging.info(
+            (
+                "SPiE eval: cnn=%s nme=shared_only "
+                "posterior_router=%s cnn_top1=%.2f shared_top1=%.2f."
+            ),
+            self.spie_eval_fusion_strategy,
+            self.posterior_router,
+            main_accy["top1"],
+            shared_accy["top1"],
+        )
+
+        return main_accy, shared_accy

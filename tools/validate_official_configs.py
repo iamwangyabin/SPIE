@@ -34,6 +34,7 @@ METHODS = {
     "tuna",
     "min",
     "spie",
+    "spie_ablation",
 }
 
 COMMON_REQUIRED = {
@@ -329,6 +330,21 @@ METHOD_REQUIRED = {
         "posterior_alpha",
         "posterior_router",
     },
+}
+
+
+METHOD_REQUIRED["spie_ablation"] = METHOD_REQUIRED["spie"] | {
+    "ablation_group",
+    "ablation_name",
+    "paper_table",
+    "ablation_purpose",
+    "spie_eval_fusion_strategy",
+    "synthetic_samples_per_class",
+    "expert_adapter_type",
+    "expert_lora_rank",
+    "expert_lora_alpha",
+    "spie_disable_experts",
+    "spie_disable_replay",
 }
 
 
